@@ -1,1 +1,77 @@
-# Control-Panel
+# Probe Control Panel
+
+A self-hosted control panel for [neumann-probe.net](https://neumann-probe.net/).
+It runs 24/7 in Docker, watches your whole fleet through the game's official
+API, and serves a dashboard that works on PC and phone.
+
+**Rule for this project:** the panel only uses what the game API actually offers.
+The contract is [`spec/openapi.yaml`](spec/openapi.yaml) (API version 150).
+TypeScript types are generated from it (`npm run gen:api`), so calling an
+endpoint, parameter or field that isn't in the spec doesn't compile.
+
+## Run it
+
+```bash
+cp .env.example .env        # then set GAME_API_KEY
+docker compose up -d --build
+# open http://<docker-host>:8080
+```
+
+To get an API key, call `POST /api/me/api-key` while signed in (see the spec).
+The clear token is only shown once. Put it in `.env` as `GAME_API_KEY`.
+
+All settings are listed in [`.env.example`](.env.example). The panel stores its
+last known state in the `panel-data` volume, so a restart shows data straight away.
+
+## What step 1 does (read-only)
+
+| View | Data comes from |
+| --- | --- |
+| Fleet cards: status, integrity, deuterium, storage, movement | `GET /api/probes`, `GET /api/probe/{probeId}` |
+| Mannies: task, progress, ETA, location, cargo, order readiness | `GET /api/probe/{probeId}/mannies` |
+| Storage: containers, resources, items, external tanks | `Probe.inventory` from `GET /api/probe/{probeId}` |
+| Alerts and damage warnings | `GET /api/probe/{probeId}/alerts`, `GET /api/probe/{probeId}/damage-warnings` |
+| Sector objects, SCUT coverage | `GET /api/probe/{probeId}/sector` |
+| Map | `GET /api/visited-sectors` + probe sector telemetry |
+| Missions | `GET /api/probe/missions` |
+| System: player, API version, rate limit, call log | `GET /api/me`, `GET /api/version`, `X-RateLimit-*` headers |
+
+### Things the API imposes that the panel handles
+
+- **Reachability.** Probe-scoped routes only work for the default probe and
+  probes in its sector or shared active SCUT coverage (`ProbeSummary.isReachable`).
+  Out-of-reach probes only return name, status `out_of_scut_range` and sector,
+  so the panel shows them as "can't be given orders" and skips the other calls.
+- **Rate limit.** One sliding window per token. The panel reads
+  `X-RateLimit-Limit/Remaining/Reset`, keeps a reserve (default 30%) free for
+  orders and fixes, and waits out `Retry-After` on a 429.
+- **Refresh timing.** It refreshes when the API says the next Manny task is due
+  (`nextUsefulRefreshDelayMs`) or when a probe is about to arrive, within the
+  min/max bounds you set.
+
+### Attention flags
+
+Flags come from API fields, and each one shows its source on hover. The
+thresholds (integrity below 50% or 25%, deuterium below 20%, storage at 95%,
+task overdue by more than 10 minutes) are panel defaults, not game rules.
+The 7-day storage wait countdown comes straight from the spec
+(`MannyWaitingForSpaceTask`).
+
+## Develop
+
+```bash
+npm install
+npm run dev:mock                     # fake game API on :9090 (token vng_mock)
+GAME_BASE_URL=http://127.0.0.1:9090 GAME_API_KEY=vng_mock npm run dev:server
+npm run dev:web                      # UI on :5173, proxies to the server
+npm test
+```
+
+The mock (`mock/`) is typed against the generated schema too, so it can't drift from the spec.
+
+## Roadmap
+
+1. Foundation and read-only live view (this)
+2. Problems page with automatic fixes and a fix log
+3. 24/7 automation rules (mining, crafting, repair, deuterium, storage, exploration, probe-build suggestions)
+4. Remaining endpoints as manual controls, plus messaging, logbook and forum

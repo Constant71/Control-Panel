@@ -1,0 +1,14 @@
+services:
+  probe-control-panel:
+    build: .
+    image: probe-control-panel:latest
+    container_name: probe-control-panel
+    restart: unless-stopped
+    env_file: .env
+    ports:
+      - "8080:8080"
+    volumes:
+      - panel-data:/data
+
+volumes:
+  panel-data:
