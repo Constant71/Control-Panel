@@ -6,7 +6,10 @@ import { existsSync } from "node:fs";
 import { loadConfig } from "./config.js";
 import { RateLimiter } from "./rateLimiter.js";
 import { Game } from "./gameClient.js";
-import { Poller, type Snapshot } from "./poller.js";
+import { Poller } from "./poller.js";
+import { Fixer } from "./fixer.js";
+import { DiscoveryTracker } from "./discovery.js";
+import type { AutoFixMode } from "../shared/problems.js";
 
 const config = loadConfig();
 if (!config.gameApiKey) {
@@ -22,6 +25,32 @@ const poller = new Poller(game, {
   dataDir: config.dataDir,
 });
 
+const fixer = new Fixer(game, config.dataDir, () => poller.refreshSoon(3000), Date.now, config.dropCargoBeforeDeadlineMs);
+const discovery = new DiscoveryTracker(game, config.dataDir, {
+  scansPerCycle: config.sectorScansPerCycle,
+  rescanMs: config.sectorRescanMs,
+  blueprintCheckMs: config.blueprintCheckMs,
+});
+
+// After every refresh: fix first (urgent), then scan for discoveries.
+let hooks: Promise<void> = Promise.resolve();
+poller.on("snapshot", (snapshot) => {
+  hooks = hooks
+    .then(() => fixer.onSnapshot(snapshot))
+    .then(() => discovery.onSnapshot(snapshot))
+    .catch((err) => app.log.error(err, "post-poll hooks failed"));
+});
+
+function panelState() {
+  return {
+    snapshot: poller.snapshot,
+    rate: limiter.snapshot(),
+    fixMode: fixer.mode,
+    problems: fixer.problems,
+    unreadDiscoveries: discovery.discoveries().filter((d) => !d.read && d.present).length,
+  };
+}
+
 const app = Fastify({ logger: { level: process.env.LOG_LEVEL ?? "info" } });
 
 if (config.panelPassword) {
@@ -36,10 +65,34 @@ if (config.panelPassword) {
 
 app.get("/panel-api/health", async () => ({ ok: true, lastPollFinishedAt: poller.snapshot.lastPollFinishedAt }));
 
-app.get("/panel-api/state", async () => ({
-  snapshot: poller.snapshot,
-  rate: limiter.snapshot(),
+app.get("/panel-api/state", async () => panelState());
+
+app.get("/panel-api/problems", async () => ({
+  mode: fixer.mode,
+  problems: fixer.problems,
+  attempts: fixer.attempts,
+  log: fixer.log.slice(-300).reverse(),
 }));
+
+app.post<{ Body: { mode?: AutoFixMode } }>("/panel-api/fix-mode", async (req, reply) => {
+  const mode = req.body?.mode;
+  if (mode !== "auto" && mode !== "dry_run" && mode !== "off") return reply.code(400).send({ error: "mode must be auto, dry_run or off" });
+  await fixer.setMode(mode);
+  return { mode };
+});
+
+app.post<{ Body: { problemKey?: string; fixId?: string } }>("/panel-api/fix", async (req, reply) => {
+  const { problemKey, fixId } = req.body ?? {};
+  if (!problemKey || !fixId) return reply.code(400).send({ error: "problemKey and fixId are required" });
+  return { entry: await fixer.runManually(problemKey, fixId) };
+});
+
+app.get("/panel-api/discoveries", async () => ({ discoveries: discovery.discoveries(), scans: discovery.scans() }));
+
+app.post<{ Body: { keys?: string[] | "all" } }>("/panel-api/discoveries/read", async (req) => {
+  await discovery.markRead(req.body?.keys ?? "all");
+  return { ok: true };
+});
 
 app.get("/panel-api/api-log", async () => ({ entries: game.log.slice().reverse() }));
 
@@ -56,15 +109,19 @@ app.get("/panel-api/events", (req, reply) => {
     Connection: "keep-alive",
     "X-Accel-Buffering": "no",
   });
-  const send = (snapshot: Snapshot) => {
-    reply.raw.write(`event: state\ndata: ${JSON.stringify({ snapshot, rate: limiter.snapshot() })}\n\n`);
+  const send = () => {
+    reply.raw.write(`event: state\ndata: ${JSON.stringify(panelState())}\n\n`);
   };
-  send(poller.snapshot);
+  send();
   poller.on("snapshot", send);
+  fixer.on("changed", send);
+  discovery.on("changed", send);
   const ping = setInterval(() => reply.raw.write(": ping\n\n"), 25_000);
   req.raw.on("close", () => {
     clearInterval(ping);
     poller.off("snapshot", send);
+    fixer.off("changed", send);
+    discovery.off("changed", send);
   });
 });
 
@@ -80,7 +137,7 @@ if (webRoot) {
   });
 }
 
-await poller.loadPersisted();
+await Promise.all([poller.loadPersisted(), fixer.load(), discovery.load()]);
 poller.start();
 await app.listen({ host: "0.0.0.0", port: config.port });
 

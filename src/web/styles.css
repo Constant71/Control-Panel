@@ -88,3 +88,26 @@ tr.warning td:first-child { box-shadow: inset 3px 0 var(--warn); }
   .pill { margin-left: 0; }
   .topbar { gap: 8px; }
 }
+
+/* Problems & discoveries */
+.badge { display: inline-block; min-width: 18px; margin-left: 5px; padding: 0 5px; border-radius: 9px; font-size: 11px; line-height: 18px; text-align: center; color: #031018; background: var(--info); }
+.badge.critical { background: var(--crit); } .badge.warning { background: var(--warn); }
+.mode { margin-left: auto; display: flex; align-items: center; gap: 4px; }
+.mode button { padding: 3px 8px; font-size: 12px; text-transform: capitalize; }
+.mode button.on { background: var(--accent); color: #031018; border-color: var(--accent); }
+.sev { font-size: 11px; text-transform: uppercase; letter-spacing: .04em; padding: 1px 6px; border-radius: 4px; border: 1px solid; }
+.sev.critical { color: var(--crit); } .sev.warning { color: var(--warn); } .sev.info { color: var(--info); }
+.countdown { margin-left: auto; font-size: 12px; color: var(--warn); }
+.countdown.crit { color: var(--crit); font-weight: 600; }
+.kpi-v.crit { color: var(--crit); } .kpi-v.warn { color: var(--warn); }
+.fixes { list-style: none; margin: 8px 0 0; padding: 0; display: flex; flex-direction: column; gap: 6px; }
+.fixes li { display: flex; justify-content: space-between; align-items: flex-start; gap: 10px; padding: 6px 8px; background: var(--panel2); border-radius: 6px; }
+.fixes li button { flex-shrink: 0; }
+.tag.auto { color: var(--good); } .tag.confirm { color: var(--warn); }
+.advice { margin: 6px 0 0; padding: 6px 8px; border-left: 2px solid var(--info); background: var(--panel2); border-radius: 4px; }
+.ok-text { color: var(--good); } .warn-text { color: var(--warn); }
+details summary { cursor: pointer; margin-bottom: 6px; }
+@media (max-width: 640px) {
+  .mode { margin-left: 0; width: 100%; }
+  .fixes li { flex-direction: column; }
+}
