@@ -14,7 +14,7 @@ endpoint, parameter or field that isn't in the spec doesn't compile.
 ```bash
 cp .env.example .env        # then set GAME_API_KEY
 docker compose up -d --build
-# open http://<docker-host>:8080
+# open http://<docker-host>:8184  (change with PANEL_PORT in .env)
 ```
 
 To get an API key, call `POST /api/me/api-key` while signed in (see the spec).
