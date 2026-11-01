@@ -57,6 +57,40 @@ task overdue by more than 10 minutes) are panel defaults, not game rules.
 The 7-day storage wait countdown comes straight from the spec
 (`MannyWaitingForSpaceTask`).
 
+## Step 2: Problems page and automatic fixes
+
+After every refresh the server checks the fleet for anything stuck and runs
+the matching fix, using only real endpoints. The Problems page shows each
+problem, the game's own deadline (e.g. the 7-day storage wait), what was tried,
+and a **Run now / Do it** button. The auto-fix mode can be **auto**, **dry run**
+(log only) or **off**.
+
+| Problem (detected from) | Fix | Runs |
+| --- | --- | --- |
+| Manny can't dock, storage full (`MannyWaitingForSpaceTask`) | dock on another probe in its sector with room (`transfer-to-probe`) · move stock into a container with room (`storage-moves`) · drop cargo (`drop-manny-cargo`) | auto · auto · confirm, auto when under 24h left |
+| Mining delivery blocked (`MannyMiningTask.waitingFor`) | move stock into a container with room (`storage-moves`) | auto |
+| Probe hull ≥95% full (`StorageContainer.freeCapacity`) | move stock into a container with room | auto |
+| Integrity low (`systems.integrityPercent`) | repair with an idle onboard Manny, limited by metals (`repair`) | auto |
+| Deuterium low (`fuel`) | refuel station in sector (`refill-deuterium-tank`) · transfer from a probe in the same sector that keeps ≥50% (`transfer-deuterium-to-probe`) | auto |
+| Abandoned Manny in sector (`objects[type=manny]`) | salvage (`salvage`) | auto |
+| Task overdue (`taskEstimatedEndTime`) | recall, only when the Manny is local; a remote recall leaves it "forgotten" | confirm |
+| Only probe lost (`Probe.alert` / status) | mind snapshot reassign (irreversible) | confirm |
+| Out of command range, dead/disabled, failed move, incoming missile, damage warnings, bad API key | no API fix exists, so the panel gives advice | — |
+
+Safety rules: a fix is never repeated while the game catches up (5 min), a
+rejected fix backs off (5 min doubling to 6 h) with the game's error code in
+the log, at most 5 auto fixes run per refresh, and every attempt is saved in
+`/data/fixer.json`.
+
+### Discoveries
+
+Every visited sector is rescanned in rotation (`GET /api/sector`). The panel
+alerts on **potential blueprints**: dormant constructs (inspecting one with a
+Manny unlocks a probe improvement), newly learned blueprints
+(`probe-improvements-available`) and `blueprint_shared` alerts. It also lists
+abandoned Mannies, detached containers, drifting items, refuel stations and
+SCUT relays.
+
 ## Develop
 
 ```bash
@@ -71,7 +105,7 @@ The mock (`mock/`) is typed against the generated schema too, so it can't drift 
 
 ## Roadmap
 
-1. Foundation and read-only live view (this)
-2. Problems page with automatic fixes and a fix log
-3. 24/7 automation rules (mining, crafting, repair, deuterium, storage, exploration, probe-build suggestions)
+1. Foundation and read-only live view
+2. Problems page with automatic fixes, fix log, discoveries (this)
+3. 24/7 automation rules (mining, crafting, repair, deuterium, storage, exploration within SCUT range, inspecting dormant constructs, probe-build suggestions, automatic naming)
 4. Remaining endpoints as manual controls, plus messaging, logbook and forum

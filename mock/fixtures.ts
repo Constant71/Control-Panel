@@ -33,7 +33,9 @@ const inventory = (used: number): S["ProbeInventory"] => ({
       containers: [{ container: { id: "probe-core", kind: "probe", label: "Probe", sortOrder: 0 }, amount: used * 0.4, containerSpace: used * 0.4, capacityUnit: "earth_container_equivalent" }],
     },
   ],
-  containers: [container("probe-core", "Probe", "probe", 1, used)],
+  containers: used > 0.9
+    ? [container("probe-core", "Probe", "probe", 1, used), container("container-itm_extra", "Extra 1", "container", 0.5, 0.1)]
+    : [container("probe-core", "Probe", "probe", 1, used)],
   externalTanks: [],
 });
 
@@ -103,8 +105,23 @@ export function buildWorld() {
 
   const sector: S["SectorObservation"] = {
     relativeCoordinates: { x: 0, y: 0, z: 0 }, distance: 0, knowledgeLevel: "detailed", confidence: 1,
-    scan: {} as S["SectorObservation"]["scan"], scutCoverageStatus: "uncovered", scutNetworks: [], objects: [],
+    scan: {} as S["SectorObservation"]["scan"], scutCoverageStatus: "uncovered", scutNetworks: [],
+    objects: [
+      { id: "manny-mny_lost", type: "manny", name: "manny-old" } as S["SectorObject"],
+    ],
   };
+  const visitedSectorObs = (v: { x: number; y: number; z: number }): S["SectorObservation"] => ({
+    relativeCoordinates: v, distance: 1, knowledgeLevel: "detailed", confidence: 1,
+    scan: {} as S["SectorObservation"]["scan"], scutCoverageStatus: "uncovered", scutNetworks: [],
+    objects: v.x === 2 && v.y === 0
+      ? [{ id: "construct-7", type: "dormant_construct", name: "Dormant construct" } as S["SectorObject"],
+         { id: "station-1", type: "deuterium_refuel_station", name: "Refuel station" } as S["SectorObject"]]
+      : [],
+  });
+  const improvements = [
+    { id: "deuterium_compression", name: "Deuterium compression", description: "Compresses the tank.", available: true, done: false,
+      installableOnProbe: true, durationSeconds: 300, ingredients: [], effects: {} },
+  ] as unknown as S["ProbeImprovement"][];
 
   const visited: S["VisitedSector"][] = [
     { relativeCoordinates: { x: 0, y: 0, z: 0 }, firstVisitedAt: iso(-20 * DAY), lastVisitedAt: iso(-DAY), visitCount: 5 },
@@ -114,5 +131,5 @@ export function buildWorld() {
   ];
 
   const missions: S["Mission"][] = [];
-  return { probes, farProbe, summaries, mannies, alerts, sector, visited, missions };
+  return { probes, farProbe, summaries, mannies, alerts, sector, visited, missions, visitedSectorObs, improvements };
 }

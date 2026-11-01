@@ -21,6 +21,12 @@ export interface Config {
   dataDir: string;
   /** Optional HTTP Basic password for the panel itself. */
   panelPassword: string;
+  /** Visited sectors rescanned per refresh (GET /api/sector). */
+  sectorScansPerCycle: number;
+  sectorRescanMs: number;
+  blueprintCheckMs: number;
+  /** Auto-drop a waiting Manny's cargo when the 7-day deadline is this close. */
+  dropCargoBeforeDeadlineMs: number;
 }
 
 export function loadConfig(): Config {
@@ -33,5 +39,9 @@ export function loadConfig(): Config {
     rateReserveFraction: Math.min(0.9, Math.max(0, num("RATE_RESERVE_FRACTION", 0.3))),
     dataDir: process.env.DATA_DIR ?? "./data",
     panelPassword: process.env.PANEL_PASSWORD ?? "",
+    sectorScansPerCycle: Math.max(0, num("SECTOR_SCANS_PER_CYCLE", 3)),
+    sectorRescanMs: num("SECTOR_RESCAN_HOURS", 6) * 3_600_000,
+    blueprintCheckMs: num("BLUEPRINT_CHECK_MINUTES", 10) * 60_000,
+    dropCargoBeforeDeadlineMs: num("DROP_CARGO_HOURS_BEFORE_DEADLINE", 24) * 3_600_000,
   };
 }
