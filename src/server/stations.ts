@@ -20,10 +20,13 @@ import type { SectorKnowledge } from "./discovery.js";
 import { helperGoals, planHelpers, productionGoals, toCraftGoals, type HelperPlan } from "./production.js";
 import { fleeCard, type FleeApproval } from "./flee.js";
 import { planStationTankers } from "./stationTanker.js";
+import { DEPOT_FULL_FREE, depotFree, hiddenIdFor, planDepots } from "./depot.js";
+import { taskOf as taskOfManny } from "./automation.js";
 import type { CraftGoal } from "../shared/crafting.js";
 import {
   DEFAULT_STATION, MEMBER_ROLES, ROLE_LABEL, type Check, type FleeCard, type Handoff, type StationOp, type Trip, type MemberRole, type MemberStatus, type StationConfig, type StationLogEntry,
   type StationMode, type StationStatus, type StationsData, type StockTarget, type TargetStatus,
+  type Depot,
 } from "../shared/stations.js";
 
 type Vec = { x: number; y: number; z: number };
@@ -40,6 +43,8 @@ interface StoredData extends StationsData {
   flee: Record<string, FleeApproval>;
   /** Op id -> retry-after ISO, after a refused call. */
   failures: Record<string, string>;
+  /** Asteroid depots by station id. */
+  depots: Record<string, Depot>;
 }
 
 const MAX_OPS_PER_CYCLE = 6;
@@ -47,7 +52,8 @@ const FAIL_BACKOFF_MS = 10 * 60_000;
 /** A deuterium transfer takes five minutes (spec); don't send another to the same pair meanwhile. */
 const REFUEL_GAP_MS = 7 * 60_000; // also spaces Manny moves between a pair
 const RULES_GAP_MS = 30 * 60_000;
-const emptyData = (): StoredData => ({ stations: [], members: {}, log: [], knownProbes: null, handoffs: [], trips: [], flee: {}, failures: {} });
+const DEPOT_READ_MS = 2 * 60_000;
+const emptyData = (): StoredData => ({ stations: [], members: {}, log: [], knownProbes: null, handoffs: [], trips: [], flee: {}, failures: {}, depots: {} });
 
 export class StationError extends Error {
   constructor(readonly status: number, message: string) {
@@ -100,7 +106,7 @@ const clamp = (v: unknown, lo: number, hi: number, dflt: number) => {
 
 /** Read-only picture of every station: stock against targets, group, and readiness checks. */
 export function stationStatus(
-  snapshot: Snapshot, data: StationsData, next: StationOp[] = [], handoffs: Handoff[] = [], trips: Trip[] = [], dispatchNotes: Record<number, string[]> = {},
+  snapshot: Snapshot, data: StationsData & { depots?: Record<string, Depot> }, next: StationOp[] = [], handoffs: Handoff[] = [], trips: Trip[] = [], dispatchNotes: Record<number, string[]> = {},
   helpers: HelperPlan | null = null,
 ): StationStatus[] {
   const views = new Map(snapshot.probes.map((v) => [v.summary.id, v]));
@@ -211,6 +217,8 @@ export function stationStatus(
       dispatchNotes: dispatchNotes[cfg.probeId] ?? [],
       production: productionGoals(cfg, data, snapshot).map((g) => ({ ...g, have: stock ? (stock.get(g.item) ?? 0) : null })),
       flee: null as FleeCard | null,
+      depot: data.depots?.[String(cfg.probeId)] ?? null,
+      depotNote: null as string | null,
     };
   });
 }
@@ -233,6 +241,8 @@ export interface StationsDeps {
   goals?: (byProbe: Record<string, CraftGoal[]>) => void;
   /** Your own crafting queue for a probe (a Manny line on the station starts helper builds too). */
   queued?: (probeId: number) => CraftGoal[];
+  /** Tells the mining automation which hidden container each station mines into, and its room. */
+  depots?: (byProbe: Record<string, { objectId: string; asteroidId: string; free: number }>) => void;
 }
 
 export class Stations extends EventEmitter {
@@ -244,6 +254,7 @@ export class Stations extends EventEmitter {
   fleeCards: Record<number, FleeCard> = {};
   /** Which group probes build Mannies for their station (worked out every poll). */
   helpers: HelperPlan | null = null;
+  depotNotes: Record<number, string> = {};
   private readonly refuels = new Map<string, number>();
   /** Rules updates sent recently: if the next poll still shows old rules, wait before sending again. */
   private readonly rulesSent = new Map<string, number>();
@@ -255,6 +266,7 @@ export class Stations extends EventEmitter {
 
   async load(): Promise<void> {
     this.data = await this.store.load();
+    this.data.depots ??= {};
     // Stations saved before a setting existed get its default.
     this.data.stations = this.data.stations.map((st) => ({
       ...structuredClone(DEFAULT_STATION), ...st, mannyPerRole: { ...DEFAULT_STATION.mannyPerRole, ...(st.mannyPerRole ?? {}) },
@@ -287,6 +299,7 @@ export class Stations extends EventEmitter {
 
   status(): StationStatus[] {
     return stationStatus(this.deps.snapshot(), this.data, this.next, this.data.handoffs, this.data.trips, this.dispatchNotes, this.helpers).map((st) => {
+      st.depotNote = this.depotNotes[st.probeId] ?? null;
       const card = this.fleeCards[st.probeId] ?? null;
       if (card && !card.approved) st.checks.unshift({ ok: false, text: `Danger: ${card.reasons.join(" ")} Decide on the flee card.` });
       if (card?.approved) st.checks.unshift({ ok: false, text: `Fleeing to (${card.approved.target.x}, ${card.approved.target.y}, ${card.approved.target.z}): ${card.approved.state}.` });
@@ -348,6 +361,7 @@ export class Stations extends EventEmitter {
     if (patch.fuelFloorPercent !== undefined) cfg.fuelFloorPercent = clamp(patch.fuelFloorPercent, 0, 100, cfg.fuelFloorPercent);
     if (patch.mannyTarget !== undefined) cfg.mannyTarget = clamp(patch.mannyTarget, 0, 500, cfg.mannyTarget);
     if (typeof patch.helperBuilds === "boolean") cfg.helperBuilds = patch.helperBuilds;
+    if (typeof patch.depot === "boolean") cfg.depot = patch.depot;
     if (patch.helperLend !== undefined) cfg.helperLend = clamp(patch.helperLend, 0, 50, cfg.helperLend);
     if (typeof patch.dispatch === "boolean") cfg.dispatch = patch.dispatch;
     if (patch.stationTankerReservePercent !== undefined) cfg.stationTankerReservePercent = clamp(patch.stationTankerReservePercent, 5, 90, cfg.stationTankerReservePercent);
@@ -571,7 +585,26 @@ export class Stations extends EventEmitter {
       (away.has(o.plan.probeId) || away.has(o.plan.kind === "detach" ? o.plan.toProbeId : o.plan.targetProbeId))));
     // A station that is fleeing starts nothing new: no trips out, no hand-offs, no refuels.
     const calm = (o: StationOp) => !fleeing.has(o.stationId) || (o.plan.kind === "trip_move" && o.plan.leg === "home") || o.plan.kind === "trip_mine";
-    this.next = [...fleeOps, ...dispatch.ops.filter(calm), ...service.filter(calm)];
+    // Asteroid depot: last, so hand-offs and refuels get idle Mannies first.
+    await this.readDepots(snapshot, t);
+    const depots = planDepots({ snapshot, stations: this.data.stations, depots: this.data.depots, handoffs: this.data.handoffs, busy, now: t,
+      reserved: new Set(service.flatMap((o) => (o.plan.kind === "detach" ? [o.plan.containerId] : []))) });
+    for (const c of depots.changes) {
+      if (c.depot) this.data.depots[String(c.stationId)] = c.depot;
+      else delete this.data.depots[String(c.stationId)];
+      this.addLog({ stationId: c.stationId, probeId: c.stationId, label: c.log, endpoint: null, ok: true, message: null });
+      changed = true;
+    }
+    this.depotNotes = depots.notes;
+    const mineInto: Record<string, { objectId: string; asteroidId: string; free: number }> = {};
+    for (const cfg of this.data.stations) {
+      const d = this.data.depots[String(cfg.probeId)];
+      if (!d || d.state !== "active" || d.lost || !cfg.depot || fleeing.has(cfg.probeId)) continue;
+      if (d.contents !== null && d.capacity - d.contents < DEPOT_FULL_FREE) continue; // full: it comes home next
+      mineInto[String(cfg.probeId)] = { objectId: d.objectId, asteroidId: d.asteroidId, free: depotFree(d, snapshot) };
+    }
+    this.deps.depots?.(mineInto);
+    this.next = [...fleeOps, ...dispatch.ops.filter(calm), ...service.filter(calm), ...depots.ops.filter(calm)];
     const mode = this.deps.mode?.() ?? "auto";
     let acted = false;
     if (mode !== "off") {
@@ -589,6 +622,32 @@ export class Stations extends EventEmitter {
     if (changed) await this.save();
     else this.emit("changed");
     if (acted) this.deps.onActed?.();
+  }
+
+  /** How full each active depot is: GET /api/probe/{id}/sector-objects/{objectId}/inventory, at most every 2 minutes. */
+  private async readDepots(snapshot: Snapshot, t: number): Promise<void> {
+    for (const d of Object.values(this.data.depots)) {
+      if (d.state !== "active") continue;
+      if (d.readAt && t - new Date(d.readAt).getTime() < DEPOT_READ_MS) continue;
+      const v = snapshot.probes.find((x) => x.summary.id === d.stationId);
+      if (!v?.summary.isReachable) continue;
+      d.readAt = new Date(t).toISOString();
+      try {
+        const r = await this.game.poll.GET("/api/probe/{probeId}/sector-objects/{objectId}/inventory", {
+          params: { path: { probeId: d.stationId, objectId: d.objectId } },
+        });
+        if (r.response.status === 404) {
+          if (!d.lost) this.addLog({ stationId: d.stationId, probeId: d.stationId, label: `Depot ${d.objectId} on ${d.asteroidName} can't be found`, endpoint: `GET /api/probe/${d.stationId}/sector-objects/${d.objectId}/inventory`, ok: false, message: "404: nothing new is mined into it." });
+          d.lost = true;
+          continue;
+        }
+        const inv = unwrap(r);
+        d.lost = false;
+        d.contents = inv.resources.reduce((s, x) => s + (x.amount ?? 0), 0) + inv.items.reduce((s, x) => s + (x.containerSpace ?? 0), 0);
+      } catch (err) {
+        d.note = `Couldn't read the depot: ${err instanceof GameError ? `${err.status} ${err.code}` : String(err)}`;
+      }
+    }
   }
 
   private async execute(op: StationOp, snapshot: Snapshot, dry: boolean): Promise<boolean> {
@@ -676,6 +735,33 @@ export class Stations extends EventEmitter {
             params: { path: { probeId: plan.probeId, mannyId: plan.mannyId } }, body: { targetProbeId: plan.targetProbeId },
           }));
           this.refuels.set(`manny:${plan.probeId}:${plan.targetProbeId}`, t);
+          break;
+        case "depot_hide": {
+          const r = unwrap(await c.POST("/api/probe/{probeId}/mannies/{mannyId}/detach-storage-container", {
+            params: { path: { probeId: plan.probeId, mannyId: plan.mannyId } },
+            body: { containerId: plan.containerId, mode: "hidden_on_asteroid", objectId: plan.asteroidId },
+          }));
+          const seen = (taskOfManny(r.manny).artificialObjectDetected as { objectId?: string } | undefined)?.objectId;
+          const at = new Date(t).toISOString();
+          this.data.depots[String(op.stationId)] = {
+            stationId: op.stationId, containerId: plan.containerId, objectId: seen ?? hiddenIdFor(plan.containerId), asteroidId: plan.asteroidId,
+            asteroidName: plan.asteroidName, capacity: plan.capacity, state: "hiding", at, updatedAt: at, contents: 0, readAt: null, note: null,
+          };
+          break;
+        }
+        case "depot_recover": {
+          unwrap(await c.POST("/api/probe/{probeId}/mannies/{mannyId}/recover-storage-container", {
+            params: { path: { probeId: plan.probeId, mannyId: plan.mannyId } }, body: { objectId: plan.objectId },
+          }));
+          const d = this.data.depots[String(op.stationId)];
+          if (d) Object.assign(d, { state: "recovering", updatedAt: new Date(t).toISOString() });
+          break;
+        }
+        case "depot_empty":
+          unwrap(await c.POST("/api/probe/{probeId}/storage-moves", {
+            params: { path: { probeId: plan.probeId } },
+            body: { actorMannyId: plan.mannyId, kind: "resource", fromContainerId: plan.fromContainerId, toContainerId: plan.toContainerId, resourceType: plan.resourceType, amount: plan.amount },
+          }));
           break;
         case "trip_mine":
           unwrap(await c.POST("/api/probe/{probeId}/mannies/{mannyId}/mine", {

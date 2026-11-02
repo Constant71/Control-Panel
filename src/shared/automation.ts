@@ -40,7 +40,7 @@ export interface AutomationSettings {
 }
 
 export type AutomationPlan =
-  | { kind: "mine"; probeId: number; mannyId: string; objectId: string; resources: Resource[]; targetAmount: number }
+  | { kind: "mine"; probeId: number; mannyId: string; objectId: string; resources: Resource[]; targetAmount: number; targetContainerId?: string }
   | { kind: "inspect"; probeId: number; mannyId: string; objectId: string }
   | { kind: "craft"; probeId: number; mannyId: string; recipe: string; output: string }
   | { kind: "print"; probeId: number; mannyId: string; recipe: string; output: string }

@@ -4,7 +4,7 @@ import { ago } from "./format";
 import type { GoalStatus } from "../shared/crafting";
 import {
   MEMBER_ROLES, MODE_LABEL, ROLE_LABEL, type MemberRole, type MemberStatus, type StationConfig, type StationLogEntry, type StationMode,
-  type FleeCard, type StationStatus, type StockResource, type StockTarget,
+  type FleeCard, type DepotState, type StationStatus, type StockResource, type StockTarget,
 } from "../shared/stations";
 
 interface StationsResponse {
@@ -26,6 +26,7 @@ const STEP_TEXT: Record<string, string> = {
   starting: "ordering", in_progress: "crafting", needs_ingredients: "needs parts", needs_resources: "needs resources",
   needs_manny: "waiting for a Manny", printer_busy: "printer busy", no_printer: "no printer", no_room: "no room", no_recipe: "no recipe",
 };
+const DEPOT_TEXT: Record<DepotState, string> = { hiding: "hiding", active: "mining into it", recovering: "bringing home", emptying: "emptying" };
 const TRIP_TEXT: Record<string, string> = {
   outbound: "flying out", mining: "mining", refuelling: "refuelling", returning: "flying home", handing_over: "handing over", done: "done", failed: "failed",
 };
@@ -234,6 +235,28 @@ function StationCard({ s, free, recipes, run, goals }: {
         (not Scouts) with a printer and at least 2 ECE of storage builds one Manny at a time. Docked helpers borrow up to {s.config.helperLend} station
         Mannies to mine and craft, and each finished Manny moves to the station.
       </p>
+
+      <div className="card-h mt">
+        <div className="tiny"><b>Asteroid depot</b> <span className="muted">mine into a container hidden on the asteroid: no travel legs</span></div>
+        <span className="spacer" />
+        <div className="mode">
+          <button className={s.config.depot ? "on" : ""} onClick={() => update({ depot: true })}>on</button>
+          <button className={!s.config.depot ? "on" : ""} onClick={() => update({ depot: false })}>off</button>
+        </div>
+      </div>
+      <p className="muted tiny">
+        A normal mining order flies out, mines and flies back (about 55 min per 0.05 ECE). With the depot, one empty extra container is hidden on
+        the richest asteroid here and Mannies mine metals, ice and carbon straight into it (about 25 min per 0.05 ECE). When it is full it is
+        brought home, emptied into the station's storage, and hidden again. Deuterium can't go into a container, so it still goes to the tank the
+        usual way. While it is out, the station is that container's space short; someone inspecting the asteroid could find it.
+      </p>
+      {(s.depot || s.depotNote) && (
+        <div className="tiny">
+          {s.depot && <span className="tag auto">{DEPOT_TEXT[s.depot.state]}</span>}{" "}
+          {s.depot && <span className="muted">{s.depot.asteroidName} · {s.depot.contents === null ? "?" : s.depot.contents.toFixed(3)} / {s.depot.capacity} ECE{s.depot.readAt ? ` · read ${ago(s.depot.readAt)}` : ""} </span>}
+          {s.depotNote && <span className={s.depot?.lost ? "warn-text" : "muted"}>{s.depotNote}</span>}
+        </div>
+      )}
 
       <div className="card-h mt">
         <div className="tiny"><b>Trips</b> <span className="muted">Haulers fetch what the station is short of, inside the SCUT network</span></div>

@@ -103,6 +103,15 @@ export interface PlanInput {
   departing?: Set<number>;
   /** Goals a station's production mode adds (after your own queue; an item you queued yourself wins). */
   extraGoals?: Record<string, CraftGoal[]>;
+  /** A station's asteroid depot: metals, ice and carbon from that asteroid are mined into it (no travel legs). */
+  depots?: Record<string, MineDepot>;
+}
+
+export interface MineDepot {
+  objectId: string;
+  asteroidId: string;
+  /** ECE it can still take. */
+  free: number;
 }
 
 /** Pure planner: what the automation would do right now. */
@@ -110,7 +119,7 @@ export function planAutomation(input: PlanInput): AutomationAction[] {
   return planAll(input).actions;
 }
 
-export function planAll({ snapshot, settings, inspected, busy, recipes = [], crafts = [], departing = new Set(), extraGoals = {} }: PlanInput): { actions: AutomationAction[]; crafting: GoalStatus[] } {
+export function planAll({ snapshot, settings, inspected, busy, recipes = [], crafts = [], departing = new Set(), extraGoals = {}, depots = {} }: PlanInput): { actions: AutomationAction[]; crafting: GoalStatus[] } {
   const actions: AutomationAction[] = [];
   const crafting: GoalStatus[] = [];
   for (const v of snapshot.probes) {
@@ -195,6 +204,8 @@ export function planAll({ snapshot, settings, inspected, busy, recipes = [], cra
         : cfg.targets[r] - stock[r] - pending[r];
     const needAll = (r: Resource): number => need(r) + short[r];
 
+    const depot = depots[String(p.id)];
+    let depotRoom = depot?.free ?? 0;
     let slots = cfg.maxMiners - miners.length;
     const remaining = new Map(targets.map((t) => [t.id, { ...(t.resourceAmounts ?? { deuterium: 0, metals: 0, ice: 0, carbon_compounds: 0 }) }]));
     while (slots > 0 && spare > 0) {
@@ -204,29 +215,35 @@ export function planAll({ snapshot, settings, inspected, busy, recipes = [], cra
         .sort((a, b) => b.n - a.n)[0];
       if (!wanted) break;
       const r = wanted.r;
-      const target = targets
-        .filter((t) => t.resourceTypes.includes(r) && (remaining.get(t.id)?.[r] ?? 0) >= 0.01)
-        .sort((a, b) => (remaining.get(b.id)![r] ?? 0) - (remaining.get(a.id)![r] ?? 0))[0];
+      const sources = targets.filter((t) => t.resourceTypes.includes(r) && (remaining.get(t.id)?.[r] ?? 0) >= 0.01);
+      // The depot's asteroid comes first for anything a container can hold (deuterium never: it goes to the tank).
+      const intoDepot = !!depot && r !== "deuterium" && depotRoom >= 0.01 && sources.some((t) => t.id === depot.asteroidId);
+      const target = intoDepot
+        ? sources.find((t) => t.id === depot!.asteroidId)
+        : sources.sort((a, b) => (remaining.get(b.id)![r] ?? 0) - (remaining.get(a.id)![r] ?? 0))[0];
       if (!target) {
         pending[r] += 1e9; // no source for this resource here; stop asking for it this cycle
         continue;
       }
-      // Deuterium goes to the tank, not storage; everything else needs cargo room.
-      const roomForCargo = r === "deuterium" ? Infinity : free - mannySpace;
+      // Deuterium goes to the tank and depot loads to the depot; everything else needs cargo room aboard.
+      const roomForCargo = r === "deuterium" ? Infinity : intoDepot ? depotRoom : free - mannySpace;
       const amount = floor3(Math.min(cfg.orderAmount, wanted.n, remaining.get(target.id)![r], roomForCargo));
-      if (amount < 0.01 || free < mannySpace + (r === "deuterium" ? 0 : 0.01)) break;
+      if (amount < 0.01 || free < mannySpace + (r === "deuterium" || intoDepot ? 0 : 0.01)) break;
       const m = take();
       if (!m) break;
       slots--;
-      free -= mannySpace + (r === "deuterium" ? 0 : amount);
+      if (intoDepot) depotRoom -= amount;
+      free -= mannySpace + (r === "deuterium" || intoDepot ? 0 : amount);
       pending[r] += amount;
       remaining.get(target.id)![r] -= amount;
       actions.push({
         id: `mine:${p.id}:${m.id}`,
-        label: `${m.name} mines ${amount} ECE ${r.replace("_", " ")} from ${target.name ?? target.id}`,
-        why: `${r.replace("_", " ")} is furthest below target${short[r] > 0 ? " (includes what the crafting queue needs)" : ""}. ${Math.ceil(amount / TRIP)} trip(s); room is kept for every Manny outside to dock.`,
+        label: `${m.name} mines ${amount} ECE ${r.replace("_", " ")} from ${target.name ?? target.id}${intoDepot ? " into the depot" : ""}`,
+        why: `${r.replace("_", " ")} is furthest below target${short[r] > 0 ? " (includes what the crafting queue needs)" : ""}. ${intoDepot
+          ? "Into the container hidden on this asteroid, so no travel legs."
+          : `${Math.ceil(amount / TRIP)} trip(s); room is kept for every Manny outside to dock.`}`,
         endpoint: `POST /api/probe/${p.id}/mannies/${m.id}/mine`,
-        plan: { kind: "mine", probeId: p.id, mannyId: m.id, objectId: target.id, resources: [r], targetAmount: amount },
+        plan: { kind: "mine", probeId: p.id, mannyId: m.id, objectId: target.id, resources: [r], targetAmount: amount, ...(intoDepot ? { targetContainerId: depot!.objectId } : {}) },
       });
     }
   }
@@ -261,6 +278,7 @@ export class Automation extends EventEmitter {
   stationHold: { noExplore: Set<number>; noMining: Set<number> } = { noExplore: new Set(), noMining: new Set() };
   /** Set by Stations each poll: crafting goals from each station's production mode, by probe id. */
   stationGoals: Record<string, CraftGoal[]> = {};
+  stationDepots: Record<string, MineDepot> = {};
   crafting: GoalStatus[] = [];
   suggestions: Suggestion[] = [];
   improvements: Record<string, Schemas["ProbeImprovement"][]> = {};
@@ -388,7 +406,7 @@ export class Automation extends EventEmitter {
     this.explore = this.planExplore(this.lastSnapshot);
     const r = planAll({
       snapshot: this.lastSnapshot, settings: this.state.settings, inspected: new Set(this.state.inspected), busy,
-      recipes: this.state.recipes, crafts: this.state.crafts, departing: new Set([...this.explore.departing, ...this.stationHold.noMining]), extraGoals: this.stationGoals,
+      recipes: this.state.recipes, crafts: this.state.crafts, departing: new Set([...this.explore.departing, ...this.stationHold.noMining]), extraGoals: this.stationGoals, depots: this.stationDepots,
     });
     this.lastPlan = r.actions;
     this.crafting = r.crafting;
@@ -511,7 +529,7 @@ export class Automation extends EventEmitter {
     const busy = recentlyOrdered(t);
     const all = planAll({
       snapshot, settings: s, inspected: new Set(this.state.inspected), busy, recipes: this.state.recipes, crafts: this.state.crafts,
-      departing: new Set([...this.explore.departing, ...this.stationHold.noMining]), extraGoals: this.stationGoals,
+      departing: new Set([...this.explore.departing, ...this.stationHold.noMining]), extraGoals: this.stationGoals, depots: this.stationDepots,
     });
     this.lastPlan = all.actions;
     this.crafting = all.crafting;
@@ -627,7 +645,7 @@ export class Automation extends EventEmitter {
       case "mine":
         r = await c.POST("/api/probe/{probeId}/mannies/{mannyId}/mine", {
           params: { path: { probeId: plan.probeId, mannyId: plan.mannyId } },
-          body: { objectId: plan.objectId, resources: plan.resources, targetAmount: plan.targetAmount },
+          body: { objectId: plan.objectId, resources: plan.resources, targetAmount: plan.targetAmount, ...(plan.targetContainerId ? { targetContainerId: plan.targetContainerId } : {}) },
         });
         break;
       case "inspect":
