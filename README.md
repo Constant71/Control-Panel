@@ -17,6 +17,21 @@ docker compose up -d --build
 # open http://<docker-host>:8184  (change with PANEL_PORT in .env)
 ```
 
+### Automatic updates
+
+`scripts/auto-update.sh` keeps the server on the latest `main`. It checks every few minutes and rebuilds only when
+`main` changed. The image build runs the type check and the full test suite, so if either fails the running panel is
+left as it is and that commit is skipped. `.env` and the `panel-data` volume are never touched. One-time setup on the
+Docker host (Linux), from the repo folder:
+
+```bash
+chmod +x scripts/auto-update.sh
+(crontab -l 2>/dev/null; echo "*/5 * * * * $PWD/scripts/auto-update.sh >> $PWD/auto-update.log 2>&1") | crontab -
+```
+
+The user running cron needs `git pull` access to the repo and permission to run `docker compose`. The System page
+shows the running version (commit) and when it started; `auto-update.log` shows each update.
+
 To get an API key, call `POST /api/me/api-key` while signed in (see the spec).
 The clear token is only shown once. Put it in `.env` as `GAME_API_KEY`.
 

@@ -4,11 +4,14 @@ WORKDIR /app
 COPY package.json package-lock.json ./
 RUN npm ci
 COPY . .
-RUN npm run build && npm prune --omit=dev
+# The test suite runs against the mock game: a failing test stops the build, so an auto-update
+# never replaces a working panel with a broken one.
+RUN npm run build && npm test && npm prune --omit=dev
 
 FROM node:22-alpine
 WORKDIR /app
-ENV NODE_ENV=production PORT=8080 DATA_DIR=/data
+ARG GIT_SHA=unknown
+ENV NODE_ENV=production PORT=8080 DATA_DIR=/data PANEL_VERSION=$GIT_SHA
 COPY --from=build /app/node_modules ./node_modules
 COPY --from=build /app/dist ./dist
 COPY --from=build /app/package.json ./

@@ -3,3 +3,7 @@ dist
 data
 .env
 .git
+.deployed-sha
+.failed-sha
+.auto-update.lock
+auto-update.log

@@ -6,6 +6,10 @@ export function SystemView({ state, now }: { state: PanelState; now: number }) {
   const { snapshot: s, rate } = state;
   const [log, setLog] = useState<ApiLogEntry[]>([]);
   const [onlyErrors, setOnlyErrors] = useState(false);
+  const [version, setVersion] = useState<{ version: string; startedAt: string } | null>(null);
+  useEffect(() => {
+    fetch("panel-api/health").then((r) => r.json()).then(setVersion).catch(() => {});
+  }, []);
 
   useEffect(() => {
     let alive = true;
@@ -27,6 +31,7 @@ export function SystemView({ state, now }: { state: PanelState; now: number }) {
           <strong>Game connection</strong>
           <Row k="Player" v={s.player ? `${s.player.displayName} (${s.player.username})` : "—"} />
           <Row k="API version" v={s.apiVersion ?? "—"} />
+          <Row k="Panel version" v={version ? `${version.version.slice(0, 7)} · started ${ago(version.startedAt, now)}` : "—"} />
           <Row k="Last poll" v={`${ago(s.lastPollFinishedAt, now)} (${s.lastPollDurationMs ?? "—"} ms)`} />
           <Row k="Next poll" v={until(s.nextPollAt, now)} />
           <Row k="Polls since start" v={s.pollCount} />
