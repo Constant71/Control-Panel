@@ -160,7 +160,8 @@ export function planAll({ snapshot, settings, inspected, busy, recipes = [], cra
     if (goals.length && inv) {
       const on = settings.crafting !== false;
       // Paused: still show the plan, but hand out no Mannies.
-      const res = planCrafting({ view: v, probe: p, recipes, goals, tracked: crafts, take: on ? take : () => null, room });
+      const res = planCrafting({ view: v, probe: p, recipes, goals, tracked: crafts, take: on ? take : () => null, room,
+        workers: v.mannies.length - cfg.keepIdle });
       crafting.push(...res.statuses);
       if (on) {
         actions.push(...res.actions);

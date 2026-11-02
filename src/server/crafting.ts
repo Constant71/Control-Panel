@@ -74,6 +74,8 @@ export interface CraftInput {
   take: () => Manny | null;
   /** Free storage after reserving room for every Manny outside; mutated as outputs are planned. */
   room: { free: number };
+  /** Mannies left for work after the ones kept idle for fixes. */
+  workers?: number;
 }
 
 export interface CraftResult {
@@ -92,6 +94,8 @@ export function planCrafting(input: CraftInput): CraftResult {
   const hasPrinter = !!p.inventory?.items.some((i) => i.type === "atomic_3d_printer");
   let printerBusy = !!view.mannies?.some((m) => m.currentTask === "assisting_atomic_printer");
 
+  const rate = miningRate(view.mannies);
+  const workers = Math.max(1, input.workers ?? (view.mannies?.length ?? 1));
   const actions: AutomationAction[] = [];
   const statuses: GoalStatus[] = [];
   const total: Record<Resource, number> = { deuterium: 0, metals: 0, ice: 0, carbon_compounds: 0 };
@@ -100,6 +104,7 @@ export function planCrafting(input: CraftInput): CraftResult {
     const steps: CraftStep[] = [];
     const shortfalls: Partial<Record<Resource, number>> = {};
     let work = 0;
+    let printerWork = 0;
 
     const expand = (item: string, qty: number, depth: number): void => {
       const recipe = byOutput.get(item);
@@ -118,6 +123,7 @@ export function planCrafting(input: CraftInput): CraftResult {
       const by = recipe.craftableBy.includes("manny") && MANNY_RECIPES.has(recipe.id) ? "manny"
         : recipe.craftableBy.includes("atomic_3d_printer") && PRINTER_RECIPES.has(recipe.id) ? "atomic_3d_printer" : null;
       work += qty * recipe.durationSeconds;
+      if (by === "atomic_3d_printer") printerWork += qty * recipe.durationSeconds;
       let startable = qty;
       const missingParts: string[] = [];
       let resourceShort = false;
@@ -182,11 +188,45 @@ export function planCrafting(input: CraftInput): CraftResult {
     const ipBefore = inProg.get(goal.item) ?? 0;
     if (remaining > 0) expand(goal.item, remaining, 0);
     for (const r of RESOURCES) total[r] += shortfalls[r] ?? 0;
+    const short = RESOURCES.reduce((sum, r) => sum + (shortfalls[r] ?? 0), 0);
+    const miningSeconds = short <= 0 ? 0 : rate ? short / rate : null;
+    const eta = etaFor(work, printerWork, miningSeconds ?? 0, workers);
     statuses.push({
       probeId: p.id, goal, have, inProgress: Math.min(ipBefore, remaining), done: remaining === 0, steps, shortfalls, workSeconds: work,
+      printerSeconds: printerWork, miningSeconds, etaSeconds: eta.seconds, limitedBy: eta.limitedBy,
     });
   }
   return { actions, statuses, shortfalls: total };
+}
+
+/**
+ * Rough wall time for a goal. Every craft takes one Manny for its duration (a printer craft
+ * takes its assistant Manny too), and mining takes Manny time as well, all shared by the
+ * probe's working Mannies. The atomic printer runs one craft at a time
+ * (POST /atomic-printer/craft returns 409 atomic_printer_busy), so its work can't be split.
+ */
+export function etaFor(work: number, printer: number, mining: number, workers: number): { seconds: number; limitedBy: "printer" | "mannies" } {
+  const shared = (work + mining) / Math.max(1, workers);
+  return printer >= shared ? { seconds: printer, limitedBy: "printer" } : { seconds: shared, limitedBy: "mannies" };
+}
+
+/**
+ * ECE per Manny-second, measured from Mannies mining right now: each mining task's
+ * targetAmount over its taskStartTime..taskEstimatedEndTime. Null when nobody is mining.
+ */
+export function miningRate(mannies: Manny[] | null): number | null {
+  let amount = 0;
+  let seconds = 0;
+  for (const m of mannies ?? []) {
+    if (m.currentTask !== "mining" || !m.taskStartTime || !m.taskEstimatedEndTime) continue;
+    const t = Array.isArray(m.task) || !m.task ? {} : (m.task as Record<string, unknown>);
+    const amt = Number(t.targetAmount);
+    const s = (Date.parse(m.taskEstimatedEndTime) - Date.parse(m.taskStartTime)) / 1000;
+    if (!(amt > 0) || !(s > 0)) continue;
+    amount += amt;
+    seconds += s;
+  }
+  return seconds > 0 ? amount / seconds : null;
 }
 
 export function dur(s: number): string {

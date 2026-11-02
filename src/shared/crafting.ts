@@ -43,6 +43,14 @@ export interface GoalStatus {
   shortfalls: Partial<Record<Resource, number>>;
   /** Sum of remaining craft durations (Manny-seconds), not wall time. */
   workSeconds: number;
+  /** Of workSeconds, the part the atomic printer must do. It runs one craft at a time per probe. */
+  printerSeconds: number;
+  /** Manny-seconds of mining to cover the shortfalls, from the live mining rate (null if no Manny is mining to measure it). */
+  miningSeconds: number | null;
+  /** Rough wall-clock time for this goal on its own (see etaFor). */
+  etaSeconds: number;
+  /** What sets etaSeconds: the one printer, or the Mannies' combined crafting and mining work. */
+  limitedBy: "printer" | "mannies";
 }
 
 export interface TrackedCraft {
