@@ -19,6 +19,11 @@ export interface DetectOptions {
   dropCargoBeforeDeadlineMs?: number;
   /** Mannies that recently received an order and may not show it yet. */
   recentlyOrderedMannies?: Set<string>;
+  /**
+   * Fuel the Stations feature manages (stations and their group probes): the fixer never moves
+   * deuterium to or from these, or the two would undo each other's transfers.
+   */
+  stationFuel?: { managed: Set<number>; advice: (probeId: number) => string };
 }
 
 type Vec = { x: number; y: number; z: number };
@@ -323,8 +328,10 @@ export function detectProblems(snapshot: Snapshot, opts: DetectOptions = {}): Pr
         if (m) fixes.push(fix({ kind: "refill_tank", probeId: d.id, mannyId: m.id }, `Refill tank at the station with ${m.name}`,
           "A deuterium refuel station is in this sector; this fills the tank to its maximum in about a minute.", "auto"));
       }
-      if (!fixes.length && !moving) {
+      const managed = opts.stationFuel?.managed.has(d.id) ?? false;
+      if (!fixes.length && !moving && !managed) {
         for (const [donorId, donor] of full) {
+          if (opts.stationFuel?.managed.has(donorId)) continue;
           if (donorId === d.id || isMoving(donor) || !same(donor.sector?.relative, d.sector?.relative)) continue;
           const dMax = donor.fuel.maxDeuterium ?? 100;
           const spare = donor.fuel.deuterium - dMax * 0.5;
@@ -338,7 +345,8 @@ export function detectProblems(snapshot: Snapshot, opts: DetectOptions = {}): Pr
           break;
         }
       }
-      if (!fixes.length)
+      if (!fixes.length && managed) advice = opts.stationFuel!.advice(d.id);
+      else if (!fixes.length)
         advice = moving ? "The probe is moving, so no transfer or refill is possible until it arrives."
           : "No refuel station or donor probe here. Mine deuterium (an asteroid with deuterium) or move to a station.";
       out.push({

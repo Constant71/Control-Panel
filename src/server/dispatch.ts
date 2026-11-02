@@ -116,6 +116,8 @@ export function planDispatch(input: DispatchInput): DispatchResult {
     const name = hv?.summary.name ?? `Probe ${t.haulerId}`;
     if (!cfg) { set(t, "failed", "The station was removed.", false); continue; }
     if (!hv) { set(t, "failed", `${name} is no longer in your fleet.`, false); continue; }
+    const mem = data.members[String(t.haulerId)];
+    if (!mem || mem.stationId !== t.stationId || !mem.role) { set(t, "done", `${name} left the group or lost its role, so the trip was dropped.`); continue; }
     if (t.state !== "handing_over") res.noMining.add(t.haulerId);
     if (!hv.summary.isReachable || !isFullProbe(hv.detail)) {
       if (now - new Date(t.updatedAt).getTime() > 30 * 60_000) set(t, "failed", `${name} has been out of command range for 30 minutes. It can't be ordered home until coverage returns.`, false);

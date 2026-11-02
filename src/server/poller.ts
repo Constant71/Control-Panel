@@ -191,6 +191,9 @@ export class Poller extends EventEmitter {
           if (detail) view.detail = detail.probe;
           if (!summary.isReachable) return { view, delay };
 
+          // At relativistic speed the sector read is refused (400 sensors_unavailable), so it isn't asked for.
+          const inFlight = ["accelerating", "cruising", "decelerating"].includes(String((view.detail as { status?: string } | null)?.status));
+          if (inFlight) view.sector = null;
           const [mannies, alerts, warnings, sector] = await Promise.all([
             attempt(`GET /api/probe/${probeId}/mannies`, errors, async () =>
               unwrap(await c.GET("/api/probe/{probeId}/mannies", params)),
@@ -201,7 +204,7 @@ export class Poller extends EventEmitter {
             attempt(`GET /api/probe/${probeId}/damage-warnings`, errors, async () =>
               unwrap(await c.GET("/api/probe/{probeId}/damage-warnings", params)),
             ),
-            attempt(`GET /api/probe/${probeId}/sector`, errors, async () =>
+            inFlight ? Promise.resolve(null) : attempt(`GET /api/probe/${probeId}/sector`, errors, async () =>
               unwrap(await c.GET("/api/probe/{probeId}/sector", params)),
             ),
           ]);

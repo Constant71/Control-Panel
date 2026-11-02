@@ -34,7 +34,8 @@ const poller = new Poller(game, {
   dataDir: config.dataDir,
 });
 
-const fixer = new Fixer(game, config.dataDir, () => poller.refreshSoon(3000), Date.now, config.dropCargoBeforeDeadlineMs);
+// Station fuel belongs to the Stations feature; the fixer leaves it alone (see Stations.fuelManaged).
+const fixer = new Fixer(game, config.dataDir, () => poller.refreshSoon(3000), Date.now, config.dropCargoBeforeDeadlineMs, () => stations.fuelManaged());
 const discovery = new DiscoveryTracker(game, config.dataDir, {
   scansPerCycle: config.sectorScansPerCycle,
   rescanMs: config.sectorRescanMs,

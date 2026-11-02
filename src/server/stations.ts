@@ -364,6 +364,12 @@ export class Stations extends EventEmitter {
     if (role !== null && !MEMBER_ROLES.includes(role)) throw new StationError(400, "Role must be Hauler, Tanker, Station Tanker or Scout.");
     const key = String(probeId);
     const before = this.data.members[key];
+    // Leaving the group or changing role ends its trips, so nothing keeps holding or steering it.
+    if (before && (stationId !== before.stationId || role !== before.role)) {
+      const at = new Date(this.now()).toISOString();
+      for (const t of this.data.trips)
+        if (t.haulerId === probeId && ACTIVE.includes(t.state)) Object.assign(t, { state: "done", updatedAt: at, note: "Ended: the probe left the group or changed role." });
+    }
     if (stationId === null) {
       if (!before) return;
       delete this.data.members[key];
@@ -378,7 +384,7 @@ export class Stations extends EventEmitter {
     this.data.members[key] = { stationId, role, joinedAt: before?.stationId === stationId ? before.joinedAt : new Date(this.now()).toISOString() };
     await this.deps.setRole(probeId, role ?? "Probe");
     const st = this.view(stationId)?.summary.name ?? `Station ${stationId}`;
-    this.addLog({ stationId, probeId, label: `${v.summary.name} → ${st} as ${role ?? "no role"}`, endpoint: null, ok: true, message: null });
+    this.addLog({ stationId, probeId, label: `${v.summary.name} → ${st} as ${role ? ROLE_LABEL[role] : "no role"}`, endpoint: null, ok: true, message: null });
     await this.save();
   }
 
@@ -402,6 +408,29 @@ export class Stations extends EventEmitter {
       await this.save();
       return { ok: false, message };
     }
+  }
+
+  /** Stations and their group probes: their deuterium is moved by station service, not by the fixer. */
+  fuelManaged(): { managed: Set<number>; advice: (probeId: number) => string } {
+    // Stations and Station Tankers always; other group probes while docked at their station
+    // (away from it, the fixer may still help, e.g. from another probe in that sector).
+    const snap = this.deps.snapshot();
+    const pos = (id: number) => sectorOf(snap?.probes.find((v) => v.summary.id === id));
+    const managed = new Set<number>(this.data.stations.map((s) => s.probeId));
+    for (const [id, m] of Object.entries(this.data.members)) {
+      const here = pos(Number(id));
+      const home = pos(m.stationId);
+      if (m.role === "StationTanker" || (here && home && here.x === home.x && here.y === home.y && here.z === home.z)) managed.add(Number(id));
+    }
+    return {
+      managed,
+      advice: (id) => {
+        const role = this.data.members[String(id)]?.role ?? null;
+        if (this.data.stations.some((s) => s.probeId === id)) return "This is a station: its group's Tankers and Station Tankers refuel it (Stations page).";
+        if (role === "StationTanker") return "Station Tanker: a low tank is expected. It mines deuterium and hands all of it to the station (Stations page).";
+        return "Part of a station group: docked service tops it up from the station (Stations page).";
+      },
+    };
   }
 
   /** Merchant confirmed a flee card: recall local Mannies, then move (run from onSnapshot). */
