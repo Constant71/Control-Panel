@@ -29,7 +29,8 @@ export function probeNames(probes: Array<{ id: number }>, roleOf: (id: number) =
       const word = NATO[(n - 1) % NATO.length] + (n > NATO.length ? String(Math.ceil(n / NATO.length)) : "");
       out.set(p.id, { name: `Station-${word}`, code: `S${word[0]}${n > NATO.length ? Math.ceil(n / NATO.length) : ""}` });
     } else {
-      out.set(p.id, { name: `${role}-${pad(n)}`, code: `${role[0]}${pad(n)}` });
+      // "ST" keeps Station Tanker Manny codes apart from Scouts ("S").
+      out.set(p.id, { name: `${role}-${pad(n)}`, code: `${role === "StationTanker" ? "ST" : role[0]}${pad(n)}` });
     }
   }
   return out;

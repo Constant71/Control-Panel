@@ -12,7 +12,7 @@ interface AutomationResponse {
   log: AutomationLogEntry[];
 }
 
-const ROLES: ProbeRole[] = ["Probe", "Station", "Hauler", "Tanker", "Scout", "Miner"];
+const ROLES: ProbeRole[] = ["Probe", "Station", "Hauler", "Tanker", "StationTanker", "Scout", "Miner"];
 const post = (url: string, body: unknown) =>
   fetch(url, { method: "POST", headers: { "Content-Type": "application/json" }, body: JSON.stringify(body) }).then((r) => r.json());
 
@@ -172,13 +172,13 @@ function Naming({ data, save, reload, probes, state }: {
         {probes.map(({ id: pid, name }) => { const id = String(pid); const role = (s.probes[id]?.role ?? s.defaults.role) as string;
           const managed = (state.stationIds ?? []).includes(pid) || !!state.stationMembers?.[id];
           return managed ? (
-            <div key={id} className="row"><span>{name}</span><span className="tiny">{role} · <a href="#/stations">set on Stations</a></span></div>
+            <div key={id} className="row"><span>{name}</span><span className="tiny">{role === "StationTanker" ? "Station Tanker" : role} · <a href="#/stations">set on Stations</a></span></div>
           ) : (
           <label key={id} className="row">
             <span>{name}</span>
             <select value={role}
               onChange={(e) => save({ probes: { [id]: { role: e.target.value as ProbeRole } } } as Partial<AutomationSettings>)}>
-              {ROLES.filter((r) => r !== "Station" || role === "Station").map((r) => <option key={r}>{r}</option>)}
+              {ROLES.filter((r) => (r !== "Station" && r !== "StationTanker") || role === r).map((r) => <option key={r} value={r}>{r === "StationTanker" ? "Station Tanker" : r}</option>)}
             </select>
           </label>
         ); })}

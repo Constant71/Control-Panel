@@ -232,7 +232,7 @@ export function planAll({ snapshot, settings, inspected, busy, recipes = [], cra
   return { actions, crafting };
 }
 
-function taskOf(m: Schemas["Manny"]): Record<string, unknown> {
+export function taskOf(m: Schemas["Manny"]): Record<string, unknown> {
   return Array.isArray(m.task) || !m.task ? {} : (m.task as Record<string, unknown>);
 }
 export function pendingCargo(m: Schemas["Manny"]): number {
@@ -484,7 +484,7 @@ export class Automation extends EventEmitter {
     if (typeof patch.naming === "boolean") s.naming = patch.naming;
     if (typeof patch.crafting === "boolean") s.crafting = patch.crafting;
     if (patch.defaults) s.defaults = sanitize({ ...s.defaults, ...patch.defaults, targets: { ...s.defaults.targets, ...(patch.defaults.targets ?? {}) } });
-    const ROLES = ["Probe", "Station", "Hauler", "Tanker", "Scout", "Miner"];
+    const ROLES = ["Probe", "Station", "Hauler", "Tanker", "StationTanker", "Scout", "Miner"];
     if (patch.probes)
       for (const [id, p] of Object.entries(patch.probes)) {
         if (p.role && !ROLES.includes(p.role)) delete p.role;

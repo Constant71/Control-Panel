@@ -3,7 +3,7 @@ import type { PanelState, Schemas } from "./types";
 import { ago } from "./format";
 import type { GoalStatus } from "../shared/crafting";
 import {
-  MEMBER_ROLES, MODE_LABEL, type MemberRole, type MemberStatus, type StationConfig, type StationLogEntry, type StationMode,
+  MEMBER_ROLES, MODE_LABEL, ROLE_LABEL, type MemberRole, type MemberStatus, type StationConfig, type StationLogEntry, type StationMode,
   type FleeCard, type StationStatus, type StockResource, type StockTarget,
 } from "../shared/stations";
 
@@ -255,7 +255,8 @@ function StationCard({ s, free, recipes, run, goals }: {
       <p className="muted tiny">
         Haulers hand over containers at least {s.config.handoffMinFillPercent}% full and get empties back (up to {s.config.containersPerHauler} each).
         Docked probes are topped up to {s.config.ferryFuelTargetPercent}% while the station stays above {s.config.fuelFloorPercent}%.
-        Tankers top the station up and keep {s.config.tankerReservePercent}% for themselves. A container holding a Manny is never handed over.
+        Tankers top the station up and keep {s.config.tankerReservePercent}% for themselves.
+        A Station Tanker mines deuterium and gives the station all of it; with no deuterium in this sector it keeps {s.config.stationTankerReservePercent}% (or the round trip, if more) and flies out to collect. A container holding a Manny is never handed over.
       </p>
       {s.next.length > 0 ? (
         <ul className="plain tiny">
@@ -297,7 +298,7 @@ function MemberRow({ m, stationId, run }: { m: MemberStatus; stationId: number; 
         <select value={m.role ?? ""} disabled={!m.reachable} title={m.reachable ? "" : "Out of range: the role can change once it is back in reach"}
           onChange={(e) => run(() => post("panel-api/stations/member", { probeId: m.probeId, stationId, role: e.target.value || null }))}>
           <option value="">No role</option>
-          {MEMBER_ROLES.map((r) => <option key={r}>{r}</option>)}
+          {MEMBER_ROLES.map((r) => <option key={r} value={r}>{ROLE_LABEL[r]}</option>)}
         </select>
         <span className="spacer" />
         <button className="tiny" onClick={() => {
@@ -325,7 +326,7 @@ function AddMember({ stationId, free, run }: { stationId: number; free: PanelSta
       </select>
       <select value={role} onChange={(e) => setRole(e.target.value as MemberRole | "")}>
         <option value="">No role</option>
-        {MEMBER_ROLES.map((r) => <option key={r}>{r}</option>)}
+        {MEMBER_ROLES.map((r) => <option key={r} value={r}>{ROLE_LABEL[r]}</option>)}
       </select>
       <button disabled={!pick || (!!v && !v.summary.isReachable && role !== "")} onClick={() => {
         run(() => post("panel-api/stations/member", { probeId: Number(pick), stationId, role: role || null }));
@@ -347,6 +348,7 @@ function TargetEditor({ cfg, recipes, onSave }: { cfg: StationConfig; recipes: s
   const [reserve, setReserve] = useState(cfg.tankerReservePercent);
   const [tripHours, setTripHours] = useState(cfg.maxTripHours);
   const [tripMargin, setTripMargin] = useState(cfg.tripFuelMarginPercent);
+  const [stReserve, setStReserve] = useState(cfg.stationTankerReservePercent);
   const [fleeAt, setFleeAt] = useState(cfg.fleeIntegrityPercent);
   const [newKind, setNewKind] = useState<"resource" | "item">("resource");
   const [newName, setNewName] = useState("");
@@ -379,7 +381,7 @@ function TargetEditor({ cfg, recipes, onSave }: { cfg: StationConfig; recipes: s
       <div className="row"><span className="grow">Offer a flee card below this integrity</span><input type="number" min={0} max={100} value={fleeAt} onChange={(e) => setFleeAt(Number(e.target.value))} /><span className="unit">%</span></div>
       <div className="row"><span className="grow">Mannies kept at the station</span><input type="number" min={0} value={mannies} onChange={(e) => setMannies(Number(e.target.value))} /><span className="unit" /></div>
       {MEMBER_ROLES.map((r) => (
-        <div key={r} className="row"><span className="grow">Mannies per {r}</span>
+        <div key={r} className="row"><span className="grow">Mannies per {ROLE_LABEL[r]}</span>
           <input type="number" min={0} value={perRole[r]} onChange={(e) => setPerRole({ ...perRole, [r]: Number(e.target.value) })} /><span className="unit" /></div>
       ))}
       <div className="row"><span className="grow">Longest stay at a mining sector</span><input type="number" min={1} max={72} value={tripHours} onChange={(e) => setTripHours(Number(e.target.value))} /><span className="unit">h</span></div>
@@ -387,11 +389,12 @@ function TargetEditor({ cfg, recipes, onSave }: { cfg: StationConfig; recipes: s
       <div className="row"><span className="grow">Hand over containers at least this full</span><input type="number" min={1} max={100} value={fill} onChange={(e) => setFill(Number(e.target.value))} /><span className="unit">%</span></div>
       <div className="row"><span className="grow">Containers per Hauler (max 4)</span><input type="number" min={0} max={4} value={boxes} onChange={(e) => setBoxes(Number(e.target.value))} /><span className="unit" /></div>
       <div className="row"><span className="grow">Top up docked probes to</span><input type="number" min={0} max={100} value={ferryFuel} onChange={(e) => setFerryFuel(Number(e.target.value))} /><span className="unit">%</span></div>
+      <div className="row"><span className="grow">Station Tanker keeps for a collecting trip (no deuterium at home)</span><input type="number" min={5} max={90} value={stReserve} onChange={(e) => setStReserve(Number(e.target.value))} /><span className="unit">%</span></div>
       <div className="row"><span className="grow">Tanker keeps at least</span><input type="number" min={0} max={100} value={reserve} onChange={(e) => setReserve(Number(e.target.value))} /><span className="unit">%</span></div>
       <button onClick={() => onSave({
         targets, fuelFloorPercent: fuel, mannyTarget: mannies, mannyPerRole: perRole,
         handoffMinFillPercent: fill, containersPerHauler: boxes, ferryFuelTargetPercent: ferryFuel, tankerReservePercent: reserve,
-        maxTripHours: tripHours, tripFuelMarginPercent: tripMargin, fleeIntegrityPercent: fleeAt,
+        maxTripHours: tripHours, tripFuelMarginPercent: tripMargin, fleeIntegrityPercent: fleeAt, stationTankerReservePercent: stReserve,
       })}>Save settings</button>
     </div>
   );

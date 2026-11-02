@@ -3,7 +3,7 @@ import type { AutoFixMode } from "./problems.js";
 import type { CraftGoal } from "./crafting.js";
 
 export type Resource = "deuterium" | "metals" | "ice" | "carbon_compounds";
-export type ProbeRole = "Probe" | "Station" | "Hauler" | "Tanker" | "Scout" | "Miner";
+export type ProbeRole = "Probe" | "Station" | "Hauler" | "Tanker" | "StationTanker" | "Scout" | "Miner";
 
 export interface ProbeAutomationSettings {
   mining: boolean;

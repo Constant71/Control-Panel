@@ -5,8 +5,9 @@
  */
 
 export type StationMode = "parts" | "manny_factory" | "probe_yard";
-export type MemberRole = "Hauler" | "Tanker" | "Scout";
-export const MEMBER_ROLES: MemberRole[] = ["Hauler", "Tanker", "Scout"];
+export type MemberRole = "Hauler" | "Tanker" | "StationTanker" | "Scout";
+export const MEMBER_ROLES: MemberRole[] = ["Hauler", "Tanker", "StationTanker", "Scout"];
+export const ROLE_LABEL: Record<MemberRole, string> = { Hauler: "Hauler", Tanker: "Tanker", StationTanker: "Station Tanker", Scout: "Scout" };
 export type StockResource = "metals" | "ice" | "carbon_compounds" | "deuterium";
 
 export type StockTarget =
@@ -45,6 +46,8 @@ export interface StationConfig {
   maxTripHours: number;
   /** Fuel left after the round trip must stay above this percent of the tank. */
   tripFuelMarginPercent: number;
+  /** Station Tanker with no deuterium at home: percent of its tank kept for the next collecting trip. */
+  stationTankerReservePercent: number;
   createdAt: string;
 }
 
@@ -65,7 +68,7 @@ export interface Trip {
   arrivedAt: string | null;
   note: string | null;
   /** "rescue": a Tanker flying out to refuel a stranded Hauler (5e). */
-  kind?: "haul" | "rescue";
+  kind?: "haul" | "rescue" | "deuterium";
   rescue?: { haulerId: number; amount: number; sentAt: string | null };
   /** Set while a Hauler lacks the fuel to fly home. */
   needsFuel?: boolean;
@@ -83,7 +86,7 @@ export type StationOpPlan =
   | { kind: "refuel"; probeId: number; mannyId: string; targetProbeId: number; amount: number; tripId?: string }
   | { kind: "recover"; probeId: number; mannyId: string; objectId: string; handoffId: string }
   | { kind: "manny_move"; probeId: number; mannyId: string; targetProbeId: number }
-  | { kind: "trip_move"; probeId: number; target: { x: number; y: number; z: number }; tripId: string; leg: "out" | "home"; resource: string; reason: string; rescue?: { haulerId: number; amount: number }; ret?: boolean }
+  | { kind: "trip_move"; probeId: number; target: { x: number; y: number; z: number }; tripId: string; leg: "out" | "home"; resource: string; reason: string; rescue?: { haulerId: number; amount: number }; ret?: boolean; tripKind?: "deuterium" }
   | { kind: "recall"; probeId: number; mannyId: string }
   | { kind: "flee_move"; probeId: number; target: { x: number; y: number; z: number } }
   | { kind: "trip_mine"; probeId: number; mannyId: string; objectId: string; resource: string; targetAmount: number; tripId: string };
@@ -227,7 +230,7 @@ export const DEFAULT_STATION: Omit<StationConfig, "probeId" | "createdAt"> = {
   ],
   fuelFloorPercent: 60,
   mannyTarget: 12,
-  mannyPerRole: { Hauler: 6, Tanker: 2, Scout: 2 },
+  mannyPerRole: { Hauler: 6, Tanker: 2, StationTanker: 4, Scout: 2 },
   service: true,
   handoffMinFillPercent: 80,
   containersPerHauler: 2,
@@ -238,6 +241,7 @@ export const DEFAULT_STATION: Omit<StationConfig, "probeId" | "createdAt"> = {
   dispatch: true,
   maxTripHours: 6,
   tripFuelMarginPercent: 20,
+  stationTankerReservePercent: 20,
 };
 
 export const MODE_LABEL: Record<StationMode, string> = {

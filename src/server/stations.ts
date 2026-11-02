@@ -19,9 +19,10 @@ import { ACTIVE, planDispatch } from "./dispatch.js";
 import type { SectorKnowledge } from "./discovery.js";
 import { productionGoals, toCraftGoals } from "./production.js";
 import { fleeCard, type FleeApproval } from "./flee.js";
+import { planStationTankers } from "./stationTanker.js";
 import type { CraftGoal } from "../shared/crafting.js";
 import {
-  DEFAULT_STATION, MEMBER_ROLES, type Check, type FleeCard, type Handoff, type StationOp, type Trip, type MemberRole, type MemberStatus, type StationConfig, type StationLogEntry,
+  DEFAULT_STATION, MEMBER_ROLES, ROLE_LABEL, type Check, type FleeCard, type Handoff, type StationOp, type Trip, type MemberRole, type MemberStatus, type StationConfig, type StationLogEntry,
   type StationMode, type StationStatus, type StationsData, type StockTarget, type TargetStatus,
 } from "../shared/stations.js";
 
@@ -137,7 +138,7 @@ export function stationStatus(
         const docked = !!mp && same(msector, sector) && !isMoving;
         const target = m.role ? cfg.mannyPerRole[m.role] : null;
         const mannies = mv?.mannies?.length ?? null;
-        if (target !== null && mannies !== null && mannies < target) notes.push(`${target - mannies} Manny short of the ${m.role} target of ${target}.`);
+        if (target !== null && mannies !== null && mannies < target) notes.push(`${target - mannies} Manny short of the ${ROLE_LABEL[m.role!]} target of ${target}.`);
         const extra = mp?.inventory ? mp.inventory.containers.filter((c) => c.kind === "container").length : null;
         if (extra !== null && extra >= 5) notes.push(`${extra} additional containers: each move risks a broken container link (10% at 5, +10% per extra).`);
         return {
@@ -248,7 +249,9 @@ export class Stations extends EventEmitter {
   async load(): Promise<void> {
     this.data = await this.store.load();
     // Stations saved before a setting existed get its default.
-    this.data.stations = this.data.stations.map((st) => ({ ...structuredClone(DEFAULT_STATION), ...st }));
+    this.data.stations = this.data.stations.map((st) => ({
+      ...structuredClone(DEFAULT_STATION), ...st, mannyPerRole: { ...DEFAULT_STATION.mannyPerRole, ...(st.mannyPerRole ?? {}) },
+    }));
   }
 
   get handoffs(): Handoff[] {
@@ -338,6 +341,7 @@ export class Stations extends EventEmitter {
     if (patch.fuelFloorPercent !== undefined) cfg.fuelFloorPercent = clamp(patch.fuelFloorPercent, 0, 100, cfg.fuelFloorPercent);
     if (patch.mannyTarget !== undefined) cfg.mannyTarget = clamp(patch.mannyTarget, 0, 500, cfg.mannyTarget);
     if (typeof patch.dispatch === "boolean") cfg.dispatch = patch.dispatch;
+    if (patch.stationTankerReservePercent !== undefined) cfg.stationTankerReservePercent = clamp(patch.stationTankerReservePercent, 5, 90, cfg.stationTankerReservePercent);
     if (patch.fleeIntegrityPercent !== undefined) cfg.fleeIntegrityPercent = clamp(patch.fleeIntegrityPercent, 0, 100, cfg.fleeIntegrityPercent);
     if (patch.yardModel === "generic" || patch.yardModel === "deuterium_tanker") cfg.yardModel = patch.yardModel;
     if (patch.maxTripHours !== undefined) cfg.maxTripHours = clamp(patch.maxTripHours, 1, 72, cfg.maxTripHours);
@@ -357,7 +361,7 @@ export class Stations extends EventEmitter {
     const v = this.view(probeId);
     if (!v) throw new StationError(404, `Probe ${probeId} is not in your fleet.`);
     if (this.isStation(probeId)) throw new StationError(400, "A station can't join another station's group.");
-    if (role !== null && !MEMBER_ROLES.includes(role)) throw new StationError(400, "Role must be Hauler, Tanker or Scout.");
+    if (role !== null && !MEMBER_ROLES.includes(role)) throw new StationError(400, "Role must be Hauler, Tanker, Station Tanker or Scout.");
     const key = String(probeId);
     const before = this.data.members[key];
     if (stationId === null) {
@@ -497,6 +501,14 @@ export class Stations extends EventEmitter {
       sectors: this.deps.sectors?.() ?? [], costPerSector: this.deps.costPerSector?.() ?? {}, busy, now: t,
       recentRefuels: new Set(this.refuels.keys()),
     });
+    const tankers = planStationTankers({
+      snapshot, data: this.data, trips: this.data.trips, sectors: this.deps.sectors?.() ?? [], costPerSector: this.deps.costPerSector?.() ?? {},
+      busy, recentRefuels: new Set(this.refuels.keys()), now: t,
+    });
+    dispatch.ops.push(...tankers.ops);
+    dispatch.changes.push(...tankers.changes);
+    for (const id of tankers.noMining) dispatch.noMining.add(id);
+    for (const [k, n] of Object.entries(tankers.notes)) (dispatch.notes[Number(k)] ??= []).push(...n);
     for (const { trip, note, ok } of dispatch.changes) {
       this.addLog({ stationId: trip.stationId, probeId: trip.haulerId, label: `Trip to (${trip.target.x}, ${trip.target.y}, ${trip.target.z}): ${trip.state}`, endpoint: null, ok, message: note });
       changed = true;
@@ -596,7 +608,7 @@ export class Stations extends EventEmitter {
             this.data.trips.push({
               id: plan.tripId, stationId: op.stationId, haulerId: plan.probeId, target: plan.target, home, resource: plan.resource, reason: plan.reason,
               state: "outbound", startedAt: now, updatedAt: now, arrivedAt: null, note: "On the way.",
-              kind: plan.rescue ? "rescue" : "haul", rescue: plan.rescue ? { ...plan.rescue, sentAt: null } : undefined,
+              kind: plan.tripKind ?? (plan.rescue ? "rescue" : "haul"), rescue: plan.rescue ? { ...plan.rescue, sentAt: null } : undefined,
             });
           } else {
             const trip = this.data.trips.find((x) => x.id === plan.tripId);

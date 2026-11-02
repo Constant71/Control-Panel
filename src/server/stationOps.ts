@@ -16,6 +16,7 @@ import { isFullProbe } from "../shared/attention.js";
 import { FALLBACK_MANNY_SPACE, pendingCargo } from "./automation.js";
 import { sectorOf } from "./stations.js";
 import type { Handoff, StationConfig, StationOp, StationsData, StorageRules } from "../shared/stations.js";
+import { ROLE_LABEL } from "../shared/stations.js";
 
 type Probe = Schemas["Probe"];
 type Manny = Schemas["Manny"];
@@ -243,7 +244,7 @@ export function planService({ snapshot, data, handoffs, busy, recentRefuels }: S
           mRoom -= space(M);
           push({
             id: `manny:${m.id}:${M.id}`, label: `${m.name} moves from ${stationName} to ${name}`,
-            why: `${name} has ${mCount} Mannies (${mem.role} target ${target}); ${stationName} has ${sCount}, above its ${cfg.mannyTarget}.`,
+            why: `${name} has ${mCount} Mannies (${ROLE_LABEL[mem.role]} target ${target}); ${stationName} has ${sCount}, above its ${cfg.mannyTarget}.`,
             endpoint: `POST /api/probe/${cfg.probeId}/mannies/${m.id}/transfer-to-probe`,
             plan: { kind: "manny_move", probeId: cfg.probeId, mannyId: m.id, targetProbeId: M.id },
           });
@@ -254,14 +255,16 @@ export function planService({ snapshot, data, handoffs, busy, recentRefuels }: S
           sRoom -= space(S);
           push({
             id: `manny:${m.id}:${cfg.probeId}`, label: `${m.name} moves from ${name} to ${stationName}`,
-            why: `${name} has ${mCount} Mannies (${mem.role} target ${target}); ${stationName} has ${sCount}, below its ${cfg.mannyTarget}.`,
+            why: `${name} has ${mCount} Mannies (${ROLE_LABEL[mem.role]} target ${target}); ${stationName} has ${sCount}, below its ${cfg.mannyTarget}.`,
             endpoint: `POST /api/probe/${M.id}/mannies/${m.id}/transfer-to-probe`,
             plan: { kind: "manny_move", probeId: M.id, mannyId: m.id, targetProbeId: cfg.probeId },
           });
         }
       }
 
-      if (mem.role === "Tanker") {
+      if (mem.role === "StationTanker") {
+        // Its deuterium hand-overs are planned in stationTanker.ts; the station never fuels it.
+      } else if (mem.role === "Tanker") {
         // A docked tanker tops the station up, keeping its own reserve.
         const sMax = maxFuel(S);
         const give = round2(Math.min(sMax - sFuel, M.fuel.deuterium - (cfg.tankerReservePercent / 100) * maxFuel(M)));

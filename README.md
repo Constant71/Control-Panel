@@ -305,6 +305,20 @@ A station never moves on its own. When it is in danger, its card on the Stations
 - **Stragglers:** an idle Hauler or Tanker left away from the station flies home once its Mannies are aboard and it has
   the fuel.
 
+## Station Tanker role
+
+A group role for a tanker whose only job is deuterium for its station (Merchant, 2026-11-02). The regular mining
+automation leaves it alone, and the station never fuels it.
+
+- **Deuterium in the station's sector:** it never leaves. Its Mannies mine deuterium (`mine` with
+  `resources: [deuterium]`) until its tank is full, and it gives the station everything it has with
+  `transfer-deuterium-to-probe` (1 point stays, because the amount must be below its own deuterium).
+- **No deuterium in the station's sector:** it gives the station everything above a reserve: 20% of its tank
+  (editable), or the round trip to the nearest deuterium if that costs more. Once it has nothing left to give and the
+  station isn't full, it flies to the nearest known deuterium sector on the SCUT network (hazards skipped), mines until
+  its tank is full, waits for every Manny, flies home and starts giving again.
+- If it ends up away from the station without a trip, it flies home once its Mannies are aboard.
+
 ## Debug export
 
 The System page has **Download debug export**: one JSON file (`GET /panel-api/diagnostics`) with the latest poll,

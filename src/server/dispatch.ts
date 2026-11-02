@@ -110,7 +110,7 @@ export function planDispatch(input: DispatchInput): DispatchResult {
 
   // 1. Move every active trip forward.
   for (const t of trips) {
-    if (!ACTIVE.includes(t.state)) continue;
+    if (!ACTIVE.includes(t.state) || t.kind === "deuterium") continue; // Station Tanker trips: stationTanker.ts
     const cfg = cfgOf.get(t.stationId);
     const hv = views.get(t.haulerId);
     const name = hv?.summary.name ?? `Probe ${t.haulerId}`;
@@ -355,7 +355,7 @@ export function planDispatch(input: DispatchInput): DispatchResult {
 
     // A group Hauler or Tanker left away from the station with nothing to do comes home.
     for (const m of members) {
-      if (m.role === "Scout" || busyIds.has(m.id) || !m.v || !m.v.summary.isReachable || !isFullProbe(m.v.detail)) continue;
+      if (m.role === "Scout" || m.role === "StationTanker" || busyIds.has(m.id) || !m.v || !m.v.summary.isReachable || !isFullProbe(m.v.detail)) continue;
       const P = m.v.detail;
       const where = sectorOf(m.v);
       if (!where || same(where, home) || isMoving(P) || ["dead", "disabled", "trapped_by_black_hole"].includes(P.status)) continue;
