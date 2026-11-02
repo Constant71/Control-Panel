@@ -145,6 +145,12 @@ refresh, so fixes always get first pick of idle Mannies.
   - Outputs only start if storage still has room for every Manny outside to
     dock, and one Manny is always kept free for fixes.
   - One-off lines leave the queue once they are reached.
+  - Each line shows a rough time to finish on its own. The atomic printer runs one
+    craft at a time on each probe, so its work can't be shared out; the Manny
+    crafting and mining work is shared by the probe's Mannies. The estimate is the
+    longer of the two, and the line says which one is the limit. Mining time is
+    measured from the Mannies mining right now (target amount over the task's start
+    and estimated end time).
   - Crafting can be paused on its own. It follows the Automation mode (auto, dry
     run or off).
 - **Build suggestions** never run on their own. Each card shows why, what it uses

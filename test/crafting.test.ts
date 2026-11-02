@@ -164,3 +164,19 @@ test("a probe moving away from a Manny's assembly is a critical problem, cancell
     await mock.close();
   }
 });
+
+test("the time estimate is the printer's serial work or the Mannies' shared work, whichever is longer", async () => {
+  const { etaFor, miningRate } = await import("../src/server/crafting.ts");
+  // One Manny from the game's default recipes: about 17.3 h of Manny crafts and 9 h of printing.
+  const manny = 17.33 * 3600, printer = 9 * 3600;
+  const thirty = etaFor(30 * (manny + printer), 30 * printer, 0, 19);
+  assert.equal(thirty.limitedBy, "printer");
+  assert.equal(Math.round(thirty.seconds / 86400), 11, "30 Mannies on one printer take about 11 days, not 33");
+  const few = etaFor(manny + printer, printer, 0, 2);
+  assert.equal(few.limitedBy, "mannies");
+
+  const start = "2026-11-02T05:46:48+00:00", end = "2026-11-02T07:36:48+00:00"; // 0.1 ECE in 6600 s, as in a live task
+  const m = { currentTask: "mining", taskStartTime: start, taskEstimatedEndTime: end, task: { targetAmount: 0.1 } } as unknown as Schemas["Manny"];
+  assert.ok(Math.abs(miningRate([m])! - 0.1 / 6600) < 1e-12);
+  assert.equal(miningRate([]), null);
+});

@@ -17,7 +17,7 @@ interface CraftingResponse {
 const post = (url: string, body: unknown) =>
   fetch(url, { method: "POST", headers: { "Content-Type": "application/json" }, body: JSON.stringify(body) }).then((r) => r.json());
 const nice = (t: string) => t.replaceAll("_", " ");
-const hours = (s: number) => (s < 3600 ? `${Math.round(s / 60)} min` : `${+(s / 3600).toFixed(1)} h`);
+const hours = (s: number) => (s < 3600 ? `${Math.round(s / 60)} min` : s < 48 * 3600 ? `${+(s / 3600).toFixed(1)} h` : `${+(s / 86400).toFixed(1)} days`);
 
 const STATUS_TEXT: Record<string, string> = {
   starting: "ordering", in_progress: "crafting", needs_ingredients: "needs parts", needs_resources: "needs resources",
@@ -182,13 +182,14 @@ function QueueTab({ data, state, reload }: { data: CraftingResponse; state: Pane
             <div className="card-h">
               <strong>{g.quantity} × {nice(g.item)}</strong>
               {g.once && <span className="tag">one-off</span>}
-              {st?.done ? <span className="tag auto">reached</span> : st && <span className="muted tiny">have {st.have}{st.inProgress ? `, ${st.inProgress} in progress` : ""} · ~{hours(st.workSeconds)} of Manny work left</span>}
+              {st?.done ? <span className="tag auto">reached</span> : st && <span className="muted tiny">have {st.have}{st.inProgress ? `, ${st.inProgress} in progress` : ""} · about {hours(st.etaSeconds)} on its own</span>}
               <span className="spacer" />
               <button onClick={() => move(i, -1)} disabled={i === 0} title="Higher priority">↑</button>
               <button onClick={() => move(i, 1)} disabled={i === goals.length - 1} title="Lower priority">↓</button>
               <button onClick={() => save(goals.filter((x) => x.id !== g.id))} title="Remove">✕</button>
             </div>
             {g.note && <div className="muted tiny">For: {g.note}</div>}
+            {st && !st.done && <div className="muted tiny">{etaText(st)}</div>}
             {st && st.steps.length > 0 && (
               <ul className="steps tiny">
                 {st.steps.map((step, j) => (
@@ -245,4 +246,16 @@ function RecipesTab({ recipes }: { recipes: Schemas["CraftingRecipe"][] }) {
       </table>
     </div>
   );
+}
+
+/** Why a goal takes as long as it does, from the planner's split of the work. */
+function etaText(st: GoalStatus): string {
+  const parts = [`${hours(st.workSeconds - st.printerSeconds)} of Manny crafting`];
+  if (st.printerSeconds) parts.push(`${hours(st.printerSeconds)} on the atomic printer`);
+  if (st.miningSeconds) parts.push(`${hours(st.miningSeconds)} of Manny mining`);
+  else if (st.miningSeconds === null) parts.push("mining time unknown until a Manny is mining here");
+  const why = st.limitedBy === "printer"
+    ? "Limited by the atomic printer, which runs one craft at a time on each probe."
+    : "Limited by how many Mannies this probe has; the work is shared between them.";
+  return `Work left: ${parts.join(", ")}. ${why}`;
 }
