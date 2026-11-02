@@ -56,6 +56,12 @@ export interface StationConfig {
   helperBuilds: boolean;
   /** Station Mannies lent to each docked helper to mine and craft for it. */
   helperLend: number;
+  /**
+   * Asteroid depot: hide an empty extra container on the asteroid being mined
+   * (detach mode hidden_on_asteroid) and mine metals, ice and carbon into it
+   * (mine targetContainerId), which drops the travel legs. Full: recover it, empty it, repeat.
+   */
+  depot: boolean;
   createdAt: string;
 }
 
@@ -97,7 +103,32 @@ export type StationOpPlan =
   | { kind: "trip_move"; probeId: number; target: { x: number; y: number; z: number }; tripId: string; leg: "out" | "home"; resource: string; reason: string; rescue?: { haulerId: number; amount: number }; ret?: boolean; tripKind?: "deuterium" }
   | { kind: "recall"; probeId: number; mannyId: string }
   | { kind: "flee_move"; probeId: number; target: { x: number; y: number; z: number } }
-  | { kind: "trip_mine"; probeId: number; mannyId: string; objectId: string; resource: string; targetAmount: number; tripId: string };
+  | { kind: "trip_mine"; probeId: number; mannyId: string; objectId: string; resource: string; targetAmount: number; tripId: string }
+  | { kind: "depot_hide"; probeId: number; mannyId: string; containerId: string; asteroidId: string; asteroidName: string; capacity: number }
+  | { kind: "depot_recover"; probeId: number; mannyId: string; objectId: string }
+  | { kind: "depot_empty"; probeId: number; mannyId: string; fromContainerId: string; toContainerId: string; resourceType: "metals" | "ice" | "carbon_compounds"; amount: number };
+
+export type DepotState = "hiding" | "active" | "recovering" | "emptying";
+
+/** A station's asteroid depot: one of its extra containers hidden on the asteroid its Mannies mine. */
+export interface Depot {
+  stationId: number;
+  containerId: string;
+  /** Hidden detached container id (from the detach task's artificialObjectDetected, or the game's id format). */
+  objectId: string;
+  asteroidId: string;
+  asteroidName: string;
+  capacity: number;
+  state: DepotState;
+  at: string;
+  updatedAt: string;
+  /** ECE inside, from GET /sector-objects/{objectId}/inventory (null until read). */
+  contents: number | null;
+  readAt: string | null;
+  note: string | null;
+  /** The inventory read returned 404: no new mining goes into it until it is found again. */
+  lost?: boolean;
+}
 
 export interface StationOp {
   id: string;
@@ -203,6 +234,10 @@ export interface StationStatus {
   production: ProductionGoal[];
   /** Danger: a flee card waiting for Merchant, or a confirmed flee under way (5e). */
   flee: FleeCard | null;
+  /** The asteroid depot, if one is out. */
+  depot: Depot | null;
+  /** Why there is no depot right now, or what it is waiting for. */
+  depotNote: string | null;
 }
 
 export interface FleeOption {
@@ -252,6 +287,7 @@ export const DEFAULT_STATION: Omit<StationConfig, "probeId" | "createdAt"> = {
   stationTankerReservePercent: 20,
   helperBuilds: true,
   helperLend: 6,
+  depot: true,
 };
 
 export const MODE_LABEL: Record<StationMode, string> = {

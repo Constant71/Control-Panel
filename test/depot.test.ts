@@ -1,0 +1,121 @@
+import { test } from "node:test";
+import assert from "node:assert/strict";
+import { startMock } from "../mock/server.ts";
+import { RateLimiter } from "../src/server/rateLimiter.ts";
+import { Game, type Schemas } from "../src/server/gameClient.ts";
+import { Poller, type Snapshot } from "../src/server/poller.ts";
+import { planDepots, hiddenIdFor, depotFree } from "../src/server/depot.ts";
+import { planAll } from "../src/server/automation.ts";
+import { clearOrders } from "../src/server/orders.ts";
+import { DEFAULT_STATION, type Depot, type StationConfig } from "../src/shared/stations.ts";
+import { DEFAULT_PROBE_SETTINGS, type AutomationSettings } from "../src/shared/automation.ts";
+
+type Probe = Schemas["Probe"];
+const box = (id: string, label: string, kind: "probe" | "container", cap: number, used: number) => ({
+  id, kind, label, sortOrder: kind === "probe" ? 0 : 1, capacity: cap, usedCapacity: used, freeCapacity: cap - used,
+  capacityUnit: "earth_container_equivalent" as const, rules: {},
+});
+
+async function setup() {
+  clearOrders();
+  const mock = await startMock(0);
+  const game = new Game(mock.url, "vng_mock", new RateLimiter(0.3));
+  const poller = new Poller(game, { minIntervalMs: 1000, maxIntervalMs: 60_000 });
+  await poller.pollOnce();
+  return { mock, poller };
+}
+
+/** Prime stopped with 4 idle Mannies aboard, a 1 ECE core and an empty 0.5 ECE extra container. */
+function home(s: Snapshot): Snapshot {
+  const snap = structuredClone(s);
+  const v = snap.probes[0];
+  v.mannies = Array.from({ length: 4 }, (_, i) => ({ ...v.mannies![0], id: `m${i}`, name: `M${i}`, currentTask: null, task: [], location: { type: "probe", sector: null }, canReceiveOrders: true }));
+  const P = v.detail as Probe;
+  delete P.movement;
+  P.status = "orbiting";
+  P.inventory!.containers = [box("probe-core", "Probe", "probe", 1, 0.2), box("container-itm_x", "Extra", "container", 0.5, 0)];
+  P.inventory!.freeCapacity = 1.3;
+  P.inventory!.items = P.inventory!.items.filter((i) => i.container?.id !== "container-itm_x");
+  for (const st of P.inventory!.resourceStocks) st.containers = (st.containers ?? []).filter((c) => c.container.id !== "container-itm_x");
+  return snap;
+}
+
+const station = (over: Partial<StationConfig> = {}): StationConfig => ({ probeId: 1, ...structuredClone(DEFAULT_STATION), createdAt: "", ...over });
+const at = (ms: number) => new Date(ms).toISOString();
+
+test("the depot cycle: hide an empty container on the richest asteroid, wait while it fills, bring it home full, empty it", async () => {
+  const { mock, poller } = await setup();
+  try {
+    const now = Date.now();
+    let snap = home(poller.snapshot);
+    let plan = planDepots({ snapshot: snap, stations: [station()], depots: {}, handoffs: [], busy: new Set(), now });
+    const hide = plan.ops[0];
+    assert.ok(hide && hide.plan.kind === "depot_hide");
+    assert.equal(hide.plan.kind === "depot_hide" && hide.plan.containerId, "container-itm_x");
+    assert.equal(hide.plan.kind === "depot_hide" && hide.plan.asteroidId, "asteroid-metal-1", "3 ECE of metals beats 2 of ice");
+    assert.equal(hiddenIdFor("container-itm_x"), "detached-container-container-itm_x", "the spec's example id");
+
+    assert.equal(planDepots({ snapshot: snap, stations: [station({ depot: false })], depots: {}, handoffs: [], busy: new Set(), now }).ops.length, 0, "off");
+    assert.equal(planDepots({ snapshot: snap, stations: [station()], depots: {}, handoffs: [], busy: new Set(), now, reserved: new Set(["container-itm_x"]) }).ops.length, 0,
+      "a container a hand-off is using is left alone");
+
+    const base: Depot = {
+      stationId: 1, containerId: "container-itm_x", objectId: "detached-container-container-itm_x", asteroidId: "asteroid-metal-1", asteroidName: "Metal 3b91",
+      capacity: 0.5, state: "hiding", at: at(now - 600_000), updatedAt: at(now - 600_000), contents: 0, readAt: null, note: null,
+    };
+    // Detached: the container left the inventory and nobody is detaching any more.
+    (snap.probes[0].detail as Probe).inventory!.containers.pop();
+    plan = planDepots({ snapshot: snap, stations: [station()], depots: { "1": base }, handoffs: [], busy: new Set(), now });
+    assert.equal(plan.changes[0].depot?.state, "active");
+
+    const active = { ...base, state: "active" as const, contents: 0.2 };
+    const miner = { ...snap.probes[0].mannies![0], id: "mx", currentTask: "mining", task: { targetAmount: 0.1, depositedAmount: 0.02, targetContainer: { id: base.objectId } } };
+    snap.probes[0].mannies!.push(miner as never);
+    assert.ok(Math.abs(depotFree(active, snap) - 0.22) < 1e-9, "0.5 - 0.2 inside - 0.08 on its way");
+    plan = planDepots({ snapshot: snap, stations: [station()], depots: { "1": active }, handoffs: [], busy: new Set(), now });
+    assert.equal(plan.ops.length, 0);
+    assert.match(plan.notes[1], /Mining into the depot/);
+
+    const full = { ...active, contents: 0.49 };
+    plan = planDepots({ snapshot: snap, stations: [station()], depots: { "1": full }, handoffs: [], busy: new Set(), now });
+    assert.equal(plan.ops.length, 0, "never recovered while a Manny mines into it (recovery would drop its cargo)");
+    snap.probes[0].mannies!.pop();
+    plan = planDepots({ snapshot: snap, stations: [station()], depots: { "1": full }, handoffs: [], busy: new Set(), now });
+    assert.equal(plan.ops[0]?.plan.kind, "depot_recover");
+
+    // Back aboard holding 0.49 ECE of metals: moved into the core.
+    snap = home(poller.snapshot);
+    const P = snap.probes[0].detail as Probe;
+    const metals = P.inventory!.resourceStocks.find((r) => r.type === "metals")!;
+    metals.containers = [...(metals.containers ?? []), { container: { id: "container-itm_x", kind: "container", label: "Extra", sortOrder: 1 }, amount: 0.49, containerSpace: 0.49, capacityUnit: "earth_container_equivalent" }];
+    plan = planDepots({ snapshot: snap, stations: [station()], depots: { "1": { ...full, state: "recovering" } }, handoffs: [], busy: new Set(), now });
+    assert.equal(plan.changes[0].depot?.state, "emptying");
+    plan = planDepots({ snapshot: snap, stations: [station()], depots: { "1": { ...full, state: "emptying" } }, handoffs: [], busy: new Set(), now });
+    const move = plan.ops[0];
+    assert.ok(move && move.plan.kind === "depot_empty" && move.plan.toContainerId === "probe-core" && move.plan.amount === 0.49);
+  } finally {
+    await mock.close();
+  }
+});
+
+test("mining goes into the depot for metals, ice and carbon, never deuterium, and needs no cargo room aboard", async () => {
+  const { mock, poller } = await setup();
+  try {
+    const snap = home(poller.snapshot);
+    const P = snap.probes[0].detail as Probe;
+    const mannySpace = Math.max(0, ...P.inventory!.items.filter((i) => i.type === "manny").map((i) => i.containerSpace)) || 0.05;
+    P.inventory!.freeCapacity = mannySpace + 0.005; // room for one Manny to dock, none for cargo
+    for (const s of P.inventory!.resourceStocks) s.amount = 0;
+    const settings: AutomationSettings = {
+      mode: "auto", inspectConstructs: false, naming: false, crafting: true, craftQueue: {}, defaults: { ...DEFAULT_PROBE_SETTINGS, keepIdle: 1 }, probes: {}, lockedNames: [],
+    };
+    const mines = (depots = {}) => planAll({ snapshot: snap, settings, inspected: new Set(), busy: new Set(), depots }).actions.filter((a) => a.plan.kind === "mine");
+    assert.ok(!mines().some((a) => a.plan.kind === "mine" && a.plan.resources[0] !== "deuterium"), "no room aboard: no cargo mining");
+    const withDepot = mines({ "1": { objectId: "detached-container-container-itm_x", asteroidId: "asteroid-metal-1", free: 0.4 } });
+    const metal = withDepot.find((a) => a.plan.kind === "mine" && a.plan.resources[0] === "metals");
+    assert.ok(metal && metal.plan.kind === "mine" && metal.plan.targetContainerId === "detached-container-container-itm_x" && metal.plan.objectId === "asteroid-metal-1");
+    assert.ok(withDepot.every((a) => a.plan.kind !== "mine" || a.plan.resources[0] !== "deuterium" || !a.plan.targetContainerId), "deuterium never goes into the depot");
+  } finally {
+    await mock.close();
+  }
+});

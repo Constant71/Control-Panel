@@ -69,13 +69,13 @@ function mannyIn(p: Probe, containerId: string): boolean {
   return (p.inventory?.items ?? []).some((i) => i.type === "manny" && i.container?.id === containerId);
 }
 
-function holdsAnything(p: Probe, c: Container): boolean {
+export function holdsAnything(p: Probe, c: Container): boolean {
   if ((c.usedCapacity ?? 0) > 1e-9) return true;
   return (p.inventory?.items ?? []).some((i) => i.container?.id === c.id);
 }
 
 /** Free space left after every Manny outside comes home with its cargo. */
-function spareRoom(p: Probe, mannies: Manny[]): number {
+export function spareRoom(p: Probe, mannies: Manny[]): number {
   const inv = p.inventory;
   if (!inv) return 0;
   const space = Math.max(0, ...inv.items.filter((i) => i.type === "manny").map((i) => i.containerSpace)) || FALLBACK_MANNY_SPACE;
