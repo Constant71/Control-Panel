@@ -2,3 +2,7 @@ node_modules/
 dist/
 data/
 .env
+.deployed-sha
+.failed-sha
+.auto-update.lock
+auto-update.log

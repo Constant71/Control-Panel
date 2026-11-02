@@ -21,6 +21,7 @@ import type { AutoFixMode } from "../shared/problems.js";
 import type { PanelOrder } from "../shared/activity.js";
 
 const config = loadConfig();
+const STARTED_AT = new Date().toISOString();
 if (!config.gameApiKey) {
   console.error("GAME_API_KEY is not set. Create one in the game (POST /api/me/api-key) and put it in .env.");
   process.exit(1);
@@ -124,7 +125,9 @@ if (config.panelPassword) {
   });
 }
 
-app.get("/panel-api/health", async () => ({ ok: true, lastPollFinishedAt: poller.snapshot.lastPollFinishedAt }));
+app.get("/panel-api/health", async () => ({
+  ok: true, lastPollFinishedAt: poller.snapshot.lastPollFinishedAt, version: process.env.PANEL_VERSION ?? "dev", startedAt: STARTED_AT,
+}));
 
 app.get("/panel-api/state", async () => panelState());
 

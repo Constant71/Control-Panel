@@ -1,6 +1,9 @@
 services:
   probe-control-panel:
-    build: .
+    build:
+      context: .
+      args:
+        GIT_SHA: ${GIT_SHA:-unknown}
     image: probe-control-panel:latest
     container_name: probe-control-panel
     restart: unless-stopped
