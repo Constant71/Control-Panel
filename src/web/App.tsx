@@ -13,17 +13,18 @@ import { describeManny, describeProbe } from "../shared/activity";
 import { CommsView } from "./CommsView";
 import { ConsoleView } from "./ConsoleView";
 import { StationsView } from "./StationsView";
+import { GuideView } from "./GuideView";
 import { callOp } from "./api";
 
 type Route =
   | { view: "fleet" } | { view: "probe"; id: number } | { view: "map" } | { view: "missions" } | { view: "system" }
-  | { view: "problems" } | { view: "discoveries" } | { view: "automation" } | { view: "builds" } | { view: "comms" } | { view: "console" } | { view: "stations" };
+  | { view: "problems" } | { view: "discoveries" } | { view: "automation" } | { view: "builds" } | { view: "comms" } | { view: "console" } | { view: "stations" } | { view: "guide" };
 
 function parseHash(): Route {
   const h = location.hash.replace(/^#\/?/, "");
   const [v, id] = h.split("/");
   if (v === "probe" && id) return { view: "probe", id: Number(id) };
-  if (v === "map" || v === "missions" || v === "system" || v === "problems" || v === "discoveries" || v === "automation" || v === "builds" || v === "comms" || v === "console" || v === "stations") return { view: v };
+  if (v === "map" || v === "missions" || v === "system" || v === "problems" || v === "discoveries" || v === "automation" || v === "builds" || v === "comms" || v === "console" || v === "stations" || v === "guide") return { view: v };
   return { view: "fleet" };
 }
 
@@ -76,6 +77,7 @@ export function App() {
           <a className={route.view === "missions" ? "on" : ""} href="#/missions">Missions</a>
           <a className={route.view === "console" ? "on" : ""} href="#/console">Console</a>
           <a className={route.view === "system" ? "on" : ""} href="#/system">System</a>
+          <a className={route.view === "guide" ? "on" : ""} href="#/guide">Guide</a>
         </nav>
         <StatusPill state={state} connected={connected} now={now} />
       </header>
@@ -108,6 +110,8 @@ export function App() {
           <StationsView state={state} now={now} />
         ) : route.view === "console" ? (
           <ConsoleView state={state} />
+        ) : route.view === "guide" ? (
+          <GuideView />
         ) : route.view === "missions" ? (
           <Missions missions={state.snapshot.missions} />
         ) : (

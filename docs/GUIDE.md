@@ -1,7 +1,8 @@
 # Probe Control Panel: user guide
 
 This guide walks through every page of the panel and what each button does. It's written for playing day to day.
-For setup and the technical detail behind each feature, see the [README](../README.md).
+You can also read it inside the panel: open **Guide** at the end of the top menu. For setup and the technical detail
+behind each feature, see the [README](../README.md).
 
 ## Contents
 

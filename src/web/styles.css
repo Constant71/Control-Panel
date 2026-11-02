@@ -192,3 +192,17 @@ tr.note-row td { border-top: none; padding-top: 0; }
 .station-label { fill: var(--warn, #e0a030); font-size: 10px; font-weight: 700; }
 .flee { border: 1px solid var(--crit); border-radius: 6px; padding: 8px; margin: 8px 0; background: color-mix(in srgb, var(--crit) 10%, transparent); }
 .flee .members { margin-top: 6px; }
+
+/* User guide (docs/GUIDE.md rendered in the Guide tab) */
+.guide { max-width: 860px; line-height: 1.55; font-size: 15px; }
+.guide h2 { font-size: 24px; margin: 8px 0 12px; }
+.guide h3 { font-size: 19px; margin: 28px 0 8px; scroll-margin-top: 70px; }
+.guide h4 { font-size: 16px; margin: 20px 0 6px; scroll-margin-top: 70px; }
+.guide h2, .guide h5 { scroll-margin-top: 70px; }
+.guide p, .guide ul, .guide ol { margin: 0 0 10px; }
+.guide ul, .guide ol { padding-left: 22px; }
+.guide li { margin: 3px 0; }
+.guide hr { border: 0; border-top: 1px solid var(--line); margin: 24px 0; }
+.guide .table-wrap { margin: 0 0 12px; }
+.guide td, .guide th { vertical-align: top; }
+.guide code { background: var(--panel2); padding: 1px 4px; border-radius: 4px; font-size: 13px; }
