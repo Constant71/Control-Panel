@@ -101,6 +101,8 @@ export interface PlanInput {
   crafts?: TrackedCraft[];
   /** Probes about to explore elsewhere: no new outside work for their Mannies. */
   departing?: Set<number>;
+  /** Goals a station's production mode adds (after your own queue; an item you queued yourself wins). */
+  extraGoals?: Record<string, CraftGoal[]>;
 }
 
 /** Pure planner: what the automation would do right now. */
@@ -108,7 +110,7 @@ export function planAutomation(input: PlanInput): AutomationAction[] {
   return planAll(input).actions;
 }
 
-export function planAll({ snapshot, settings, inspected, busy, recipes = [], crafts = [], departing = new Set() }: PlanInput): { actions: AutomationAction[]; crafting: GoalStatus[] } {
+export function planAll({ snapshot, settings, inspected, busy, recipes = [], crafts = [], departing = new Set(), extraGoals = {} }: PlanInput): { actions: AutomationAction[]; crafting: GoalStatus[] } {
   const actions: AutomationAction[] = [];
   const crafting: GoalStatus[] = [];
   for (const v of snapshot.probes) {
@@ -153,7 +155,8 @@ export function planAll({ snapshot, settings, inspected, busy, recipes = [], cra
 
     // 2. Crafting queue (onboard work, so it also runs while the probe moves).
     const short: Record<Resource, number> = { deuterium: 0, metals: 0, ice: 0, carbon_compounds: 0 };
-    const goals = settings.craftQueue?.[String(p.id)] ?? [];
+    const own = settings.craftQueue?.[String(p.id)] ?? [];
+    const goals = [...own, ...(extraGoals[String(p.id)] ?? []).filter((g) => !own.some((o) => o.item === g.item))];
     if (goals.length && inv) {
       const on = settings.crafting !== false;
       // Paused: still show the plan, but hand out no Mannies.
@@ -255,6 +258,8 @@ export class Automation extends EventEmitter {
 
   /** Set by Stations each poll: probes exploration must leave alone, and probes whose Mannies station trips direct. */
   stationHold: { noExplore: Set<number>; noMining: Set<number> } = { noExplore: new Set(), noMining: new Set() };
+  /** Set by Stations each poll: crafting goals from each station's production mode, by probe id. */
+  stationGoals: Record<string, CraftGoal[]> = {};
   crafting: GoalStatus[] = [];
   suggestions: Suggestion[] = [];
   improvements: Record<string, Schemas["ProbeImprovement"][]> = {};
@@ -382,7 +387,7 @@ export class Automation extends EventEmitter {
     this.explore = this.planExplore(this.lastSnapshot);
     const r = planAll({
       snapshot: this.lastSnapshot, settings: this.state.settings, inspected: new Set(this.state.inspected), busy,
-      recipes: this.state.recipes, crafts: this.state.crafts, departing: new Set([...this.explore.departing, ...this.stationHold.noMining]),
+      recipes: this.state.recipes, crafts: this.state.crafts, departing: new Set([...this.explore.departing, ...this.stationHold.noMining]), extraGoals: this.stationGoals,
     });
     this.lastPlan = r.actions;
     this.crafting = r.crafting;
@@ -505,7 +510,7 @@ export class Automation extends EventEmitter {
     const busy = recentlyOrdered(t);
     const all = planAll({
       snapshot, settings: s, inspected: new Set(this.state.inspected), busy, recipes: this.state.recipes, crafts: this.state.crafts,
-      departing: new Set([...this.explore.departing, ...this.stationHold.noMining]),
+      departing: new Set([...this.explore.departing, ...this.stationHold.noMining]), extraGoals: this.stationGoals,
     });
     this.lastPlan = all.actions;
     this.crafting = all.crafting;

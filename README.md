@@ -267,7 +267,23 @@ or isn't going out.
   outlined S.
 - Each station can switch trips off. The longest stay and the fuel margin are editable.
 
-Production modes, flee cards and station stuck fixes follow in 5d and 5e.
+## Step 5d: Production modes
+
+Each station's production mode becomes ordinary crafting goals ("keep at least N aboard"). The step 3b crafting
+planner works through them with `craft` and `atomic-printer/craft`, ingredients first. If your own crafting queue
+already has an item, your goal is used instead of the station's.
+
+- **Parts** (default): the station's item stock targets.
+- **Manny factory:** the `manny` recipe, enough for the station's Manny target plus whatever its group probes are short of.
+- **Probe yard:** the assembly kit for a generic probe or a deuterium tanker (pick one). The station also keeps 2 empty
+  containers instead of giving them to Haulers. The build itself stays a confirm card on the Builds page.
+- **Manny split (always on):** while a group probe is docked, idle Mannies move between it and the station
+  (`transfer-to-probe`) to meet each role's Manny target. They only move if the receiver has room, and only one move
+  runs per pair at a time.
+- The spec's `MannyCraftRequest` only takes `recipe`, so the panel doesn't rely on one Manny crafting a whole chain
+  ("whole build"). It crafts parts first instead.
+
+Flee cards and station stuck fixes follow in 5e.
 
 ## Develop
 
@@ -288,4 +304,4 @@ The mock (`mock/`) is typed against the generated schema too, so it can't drift 
 3. 24/7 automation: 3a mining, construct inspection, naming; 3b crafting and probe-build suggestions; 3c exploration. Rules (mining, crafting, repair, deuterium, storage, exploration within SCUT range, inspecting dormant constructs, probe-build suggestions, automatic naming)
 4. Remaining endpoints as manual controls, plus messaging, logbook and forum
 5. Stations (from the Stations design): 5a designation, groups and stock targets; 5b container hand-offs and
-   refuelling while docked; 5c dispatch loop and hauler trips (this); 5d production modes; 5e flee cards and stuck fixes
+   refuelling while docked; 5c dispatch loop and hauler trips; 5d production modes (this); 5e flee cards and stuck fixes

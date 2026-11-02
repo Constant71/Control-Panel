@@ -35,6 +35,8 @@ export interface StationConfig {
   ferryFuelTargetPercent: number;
   /** A docked Tanker never gives the station fuel below this percent of its own tank. */
   tankerReservePercent: number;
+  /** Probe yard (5d): which model's kit the station gathers. */
+  yardModel: "generic" | "deuterium_tanker";
   /** Dispatch (5c): send idle Haulers to mine what the station is short of, inside its SCUT network. */
   dispatch: boolean;
   /** A trip heads home after this long at the mining sector, full or not. */
@@ -73,6 +75,7 @@ export type StationOpPlan =
   | { kind: "detach"; probeId: number; mannyId: string; containerId: string; toProbeId: number; purpose: "full" | "empty" }
   | { kind: "refuel"; probeId: number; mannyId: string; targetProbeId: number; amount: number }
   | { kind: "recover"; probeId: number; mannyId: string; objectId: string; handoffId: string }
+  | { kind: "manny_move"; probeId: number; mannyId: string; targetProbeId: number }
   | { kind: "trip_move"; probeId: number; target: { x: number; y: number; z: number }; tripId: string; leg: "out" | "home"; resource: string; reason: string }
   | { kind: "trip_mine"; probeId: number; mannyId: string; objectId: string; resource: string; targetAmount: number; tripId: string };
 
@@ -176,6 +179,16 @@ export interface StationStatus {
   trips: Trip[];
   /** Why dispatch is or isn't sending a trip right now. */
   dispatchNotes: string[];
+  /** Crafting goals the production mode adds to the station's queue. */
+  production: ProductionGoal[];
+}
+
+export interface ProductionGoal {
+  item: string;
+  quantity: number;
+  why: string;
+  /** Aboard the station now (filled in for the page). */
+  have?: number | null;
 }
 
 export const DEFAULT_STATION: Omit<StationConfig, "probeId" | "createdAt"> = {
@@ -193,6 +206,7 @@ export const DEFAULT_STATION: Omit<StationConfig, "probeId" | "createdAt"> = {
   containersPerHauler: 2,
   ferryFuelTargetPercent: 90,
   tankerReservePercent: 30,
+  yardModel: "generic",
   dispatch: true,
   maxTripHours: 6,
   tripFuelMarginPercent: 20,

@@ -1,6 +1,7 @@
 import { useEffect, useState } from "react";
 import type { PanelState, Schemas } from "./types";
 import { ago } from "./format";
+import type { GoalStatus } from "../shared/crafting";
 import {
   MEMBER_ROLES, MODE_LABEL, type MemberRole, type MemberStatus, type StationConfig, type StationLogEntry, type StationMode,
   type StationStatus, type StockResource, type StockTarget,
@@ -9,6 +10,7 @@ import {
 interface StationsResponse {
   stations: StationStatus[];
   log: StationLogEntry[];
+  production: GoalStatus[];
 }
 
 const post = (url: string, body: unknown) =>
@@ -20,14 +22,18 @@ const post = (url: string, body: unknown) =>
 const nice = (t: string) => t.replaceAll("_", " ");
 const vec = (v: { x: number; y: number; z: number } | null) => (v ? `${v.x}, ${v.y}, ${v.z}` : "?");
 const RESOURCES: StockResource[] = ["metals", "ice", "carbon_compounds", "deuterium"];
+const STEP_TEXT: Record<string, string> = {
+  starting: "ordering", in_progress: "crafting", needs_ingredients: "needs parts", needs_resources: "needs resources",
+  needs_manny: "waiting for a Manny", printer_busy: "printer busy", no_printer: "no printer", no_room: "no room", no_recipe: "no recipe",
+};
 const TRIP_TEXT: Record<string, string> = {
   outbound: "flying out", mining: "mining", returning: "flying home", handing_over: "handing over", done: "done", failed: "failed",
 };
 
 const MODE_TEXT: Record<StationMode, string> = {
   parts: "Crafts parts toward the stock targets.",
-  manny_factory: "Keeps building Mannies (the manny recipe).",
-  probe_yard: "Gathers assembly kits; every build is a confirm card.",
+  manny_factory: "Keeps building Mannies (the manny recipe) for the station and its short group probes.",
+  probe_yard: "Gathers an assembly kit and keeps 2 empty containers; every build is a confirm card on the Builds page.",
 };
 
 export function StationsView({ state, now }: { state: PanelState; now: number }) {
@@ -70,7 +76,7 @@ export function StationsView({ state, now }: { state: PanelState; now: number })
 
       {data.stations.length === 0 && <p className="muted">No stations yet.</p>}
       {data.stations.map((s) => (
-        <StationCard key={s.probeId} s={s} free={free} recipes={recipes} run={run} />
+        <StationCard key={s.probeId} s={s} free={free} recipes={recipes} run={run} goals={data.production.filter((g) => g.probeId === s.probeId)} />
       ))}
 
       {data.log.length > 0 && (
@@ -119,8 +125,8 @@ function MakeStation({ free, onMake }: { free: PanelState["snapshot"]["probes"];
   );
 }
 
-function StationCard({ s, free, recipes, run }: {
-  s: StationStatus; free: PanelState["snapshot"]["probes"]; recipes: string[];
+function StationCard({ s, free, recipes, run, goals }: {
+  s: StationStatus; free: PanelState["snapshot"]["probes"]; recipes: string[]; goals: GoalStatus[];
   run: (fn: () => Promise<unknown>, okText?: string) => Promise<void>;
 }) {
   const [editing, setEditing] = useState(false);
@@ -142,7 +148,33 @@ function StationCard({ s, free, recipes, run }: {
           </select>
         </label>
       </div>
-      <p className="muted tiny">{MODE_TEXT[s.config.mode]} Production starts in a later step.</p>
+      <p className="muted tiny">
+        {MODE_TEXT[s.config.mode]}
+        {s.config.mode === "probe_yard" && (
+          <> Kit for{" "}
+            <select value={s.config.yardModel} onChange={(e) => update({ yardModel: e.target.value as StationConfig["yardModel"] })}>
+              <option value="generic">generic probe</option>
+              <option value="deuterium_tanker">deuterium tanker</option>
+            </select>
+          </>
+        )}
+      </p>
+      {s.production.length > 0 && (
+        <div className="kit">
+          {s.production.map((g) => {
+            const st = goals.find((x) => x.goal.item === g.item);
+            const own = !st || !st.goal.id.startsWith("station:");
+            return (
+              <span key={g.item} title={g.why + (st && own ? " Your own crafting queue has this item, so its goal is used instead." : "")}
+                className={`kitline ${(st?.done ?? (g.have ?? 0) >= g.quantity) ? "have" : "short"}`}>
+                {st ? `${st.have}${st.inProgress ? `+${st.inProgress}` : ""}` : (g.have ?? "?")}/{g.quantity} {nice(g.item)}
+                {st && !st.done && st.steps[0] ? ` · ${STEP_TEXT[st.steps[0].status] ?? st.steps[0].status}` : ""}
+              </span>
+            );
+          })}
+        </div>
+      )}
+      {s.production.length > 0 && <p className="muted tiny">Crafted through the Builds page's crafting queue (ingredients first). Probe builds stay confirm cards on the Builds page.</p>}
 
       <div className="tiny"><b>Checks</b>{bad > 0 && <span className="warn-text"> · {bad} to look at</span>}</div>
       <ul className="plain tiny">

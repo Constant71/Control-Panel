@@ -17,6 +17,8 @@ import { markOrdered, recentlyOrdered } from "./orders.js";
 import { detachedContainersIn, planService, sanitizeService, trackHandoffs } from "./stationOps.js";
 import { ACTIVE, planDispatch } from "./dispatch.js";
 import type { SectorKnowledge } from "./discovery.js";
+import { productionGoals, toCraftGoals } from "./production.js";
+import type { CraftGoal } from "../shared/crafting.js";
 import {
   DEFAULT_STATION, MEMBER_ROLES, type Check, type Handoff, type StationOp, type Trip, type MemberRole, type MemberStatus, type StationConfig, type StationLogEntry,
   type StationMode, type StationStatus, type StationsData, type StockTarget, type TargetStatus,
@@ -39,7 +41,7 @@ interface StoredData extends StationsData {
 const MAX_OPS_PER_CYCLE = 6;
 const FAIL_BACKOFF_MS = 10 * 60_000;
 /** A deuterium transfer takes five minutes (spec); don't send another to the same pair meanwhile. */
-const REFUEL_GAP_MS = 7 * 60_000;
+const REFUEL_GAP_MS = 7 * 60_000; // also spaces Manny moves between a pair
 const RULES_GAP_MS = 30 * 60_000;
 const emptyData = (): StoredData => ({ stations: [], members: {}, log: [], knownProbes: null, handoffs: [], trips: [], failures: {} });
 
@@ -200,6 +202,7 @@ export function stationStatus(
       handoffs: handoffs.filter((h) => h.stationId === cfg.probeId).slice(-20).reverse(),
       trips: trips.filter((x) => x.stationId === cfg.probeId).slice(-20).reverse(),
       dispatchNotes: dispatchNotes[cfg.probeId] ?? [],
+      production: productionGoals(cfg, data, snapshot).map((g) => ({ ...g, have: stock ? (stock.get(g.item) ?? 0) : null })),
     };
   });
 }
@@ -218,6 +221,8 @@ export interface StationsDeps {
   costPerSector?: () => Record<string, number>;
   /** Tells the regular automation which probes stations control. */
   hold?: (noExplore: Set<number>, noMining: Set<number>) => void;
+  /** Hands each station's production goals to the crafting planner. */
+  goals?: (byProbe: Record<string, CraftGoal[]>) => void;
 }
 
 export class Stations extends EventEmitter {
@@ -323,6 +328,7 @@ export class Stations extends EventEmitter {
     if (patch.fuelFloorPercent !== undefined) cfg.fuelFloorPercent = clamp(patch.fuelFloorPercent, 0, 100, cfg.fuelFloorPercent);
     if (patch.mannyTarget !== undefined) cfg.mannyTarget = clamp(patch.mannyTarget, 0, 500, cfg.mannyTarget);
     if (typeof patch.dispatch === "boolean") cfg.dispatch = patch.dispatch;
+    if (patch.yardModel === "generic" || patch.yardModel === "deuterium_tanker") cfg.yardModel = patch.yardModel;
     if (patch.maxTripHours !== undefined) cfg.maxTripHours = clamp(patch.maxTripHours, 1, 72, cfg.maxTripHours);
     if (patch.tripFuelMarginPercent !== undefined) cfg.tripFuelMarginPercent = clamp(patch.tripFuelMarginPercent, 0, 90, cfg.tripFuelMarginPercent);
     if (patch.mannyPerRole && typeof patch.mannyPerRole === "object")
@@ -427,6 +433,7 @@ export class Stations extends EventEmitter {
     this.dispatchNotes = dispatch.notes;
     const grouped = new Set<number>([...this.data.stations.map((x) => x.probeId), ...Object.keys(this.data.members).map(Number)]);
     this.deps.hold?.(grouped, dispatch.noMining);
+    this.deps.goals?.(Object.fromEntries(this.data.stations.map((c) => [String(c.probeId), toCraftGoals(c.probeId, productionGoals(c, this.data, snapshot))])));
     const away = new Set(this.data.trips.filter((x) => ACTIVE.includes(x.state) && x.state !== "handing_over").map((x) => x.haulerId));
     for (const o of dispatch.ops) if (o.plan.kind === "trip_move") away.add(o.plan.probeId); // leaving now: no new docked work
     const service = planService({
@@ -516,6 +523,12 @@ export class Stations extends EventEmitter {
           }
           break;
         }
+        case "manny_move":
+          unwrap(await c.POST("/api/probe/{probeId}/mannies/{mannyId}/transfer-to-probe", {
+            params: { path: { probeId: plan.probeId, mannyId: plan.mannyId } }, body: { targetProbeId: plan.targetProbeId },
+          }));
+          this.refuels.set(`manny:${plan.probeId}:${plan.targetProbeId}`, t);
+          break;
         case "trip_mine":
           unwrap(await c.POST("/api/probe/{probeId}/mannies/{mannyId}/mine", {
             params: { path: { probeId: plan.probeId, mannyId: plan.mannyId } },

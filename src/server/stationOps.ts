@@ -58,6 +58,11 @@ export function homeRules(c: Container): StorageRules {
   };
 }
 
+/** Hand-off container space on a probe: cargo room, never Manny room. */
+function isHandoffContainerList(p: Probe): { free: number } {
+  return { free: (p.inventory?.containers ?? []).filter(isHandoffContainer).reduce((s, c) => s + (c.freeCapacity ?? 0), 0) };
+}
+
 function mannyIn(p: Probe, containerId: string): boolean {
   return (p.inventory?.items ?? []).some((i) => i.type === "manny" && i.container?.id === containerId);
 }
@@ -86,7 +91,7 @@ export interface ServiceInput {
   handoffs: Handoff[];
   /** Mannies that just got an order (the game applies orders asynchronously). */
   busy: Set<string>;
-  /** Refuels sent recently, keyed "<source>:<target>", so a top-up isn't sent twice. */
+  /** Refuels ("<source>:<target>") and Manny moves ("manny:<source>:<target>") sent recently, so neither is sent twice. */
   recentRefuels: Set<string>;
 }
 
@@ -202,9 +207,12 @@ export function planService({ snapshot, data, handoffs, busy, recentRefuels }: S
         const want = Math.min(cfg.containersPerHauler, MAX_FERRY_CONTAINERS);
         const incoming = active.filter((h) => h.toProbeId === M.id).length;
         let need = want - extra - incoming;
+        // A probe yard keeps two empty containers for the assembly kit (assemble-probe takes 2 containerIds).
+        let keep = cfg.mode === "probe_yard" ? 2 : 0;
         for (const c of S.inventory?.containers ?? []) {
           if (need <= 0) break;
           if (c.kind !== "container" || inFlight.has(c.id) || holdsAnything(S, c)) continue;
+          if (keep > 0) { keep--; continue; }
           if (sRoom - (c.capacity ?? 0) < 0) continue; // the station's outside Mannies still need room
           const m = sTake();
           if (!m) break;
@@ -215,6 +223,40 @@ export function planService({ snapshot, data, handoffs, busy, recentRefuels }: S
             why: `${name} carries ${extra + incoming} of ${want} additional containers; it needs empties to carry cargo back.`,
             endpoint: `POST /api/probe/${cfg.probeId}/mannies/${m.id}/detach-storage-container`,
             plan: { kind: "detach", probeId: cfg.probeId, mannyId: m.id, containerId: c.id, toProbeId: M.id, purpose: "empty" },
+          });
+        }
+      }
+
+      // Manny split: keep each role's Manny target, moving idle Mannies between station and ferry.
+      const target = cfg.mannyPerRole[mem.role];
+      const mCount = mv.mannies.length;
+      const sCount = sv.mannies.length;
+      const space = (p: Probe) => Math.max(0, ...(p.inventory?.items ?? []).filter((i) => i.type === "manny").map((i) => i.containerSpace)) || FALLBACK_MANNY_SPACE;
+      const homeFree = (p: Probe, room: number) => room - (isHandoffContainerList(p).free);
+      const moving = [...mv.mannies, ...sv.mannies].some((m) => m.currentTask === "transferring_to_probe")
+        || recentRefuels.has(`manny:${cfg.probeId}:${M.id}`) || recentRefuels.has(`manny:${M.id}:${cfg.probeId}`);
+      if (moving) {
+        // one Manny move at a time per pair: counts only update once the transfer completes
+      } else if (mCount < target && sCount > cfg.mannyTarget && homeFree(M, mRoom) >= space(M)) {
+        const m = sTake();
+        if (m) {
+          mRoom -= space(M);
+          push({
+            id: `manny:${m.id}:${M.id}`, label: `${m.name} moves from ${stationName} to ${name}`,
+            why: `${name} has ${mCount} Mannies (${mem.role} target ${target}); ${stationName} has ${sCount}, above its ${cfg.mannyTarget}.`,
+            endpoint: `POST /api/probe/${cfg.probeId}/mannies/${m.id}/transfer-to-probe`,
+            plan: { kind: "manny_move", probeId: cfg.probeId, mannyId: m.id, targetProbeId: M.id },
+          });
+        }
+      } else if (mCount > target && sCount < cfg.mannyTarget && sRoom >= space(S)) {
+        const m = mTake();
+        if (m) {
+          sRoom -= space(S);
+          push({
+            id: `manny:${m.id}:${cfg.probeId}`, label: `${m.name} moves from ${name} to ${stationName}`,
+            why: `${name} has ${mCount} Mannies (${mem.role} target ${target}); ${stationName} has ${sCount}, below its ${cfg.mannyTarget}.`,
+            endpoint: `POST /api/probe/${M.id}/mannies/${m.id}/transfer-to-probe`,
+            plan: { kind: "manny_move", probeId: M.id, mannyId: m.id, targetProbeId: cfg.probeId },
           });
         }
       }

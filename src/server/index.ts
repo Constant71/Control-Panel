@@ -55,6 +55,9 @@ const stations = new Stations(game, config.dataDir, {
   hold: (noExplore, noMining) => {
     automation.stationHold = { noExplore, noMining };
   },
+  goals: (byProbe) => {
+    automation.stationGoals = byProbe;
+  },
 });
 
 // After every refresh: fix first (urgent), then automation, then scan for discoveries.
@@ -210,7 +213,12 @@ const stationCall = async (reply: { code: (n: number) => { send: (b: unknown) =>
     throw err;
   }
 };
-app.get("/panel-api/stations", async () => ({ stations: stations.status(), log: stations.log.slice(-200).reverse() }));
+app.get("/panel-api/stations", async () => ({
+  stations: stations.status(),
+  log: stations.log.slice(-200).reverse(),
+  // How the crafting planner is doing on each station's production goals.
+  production: automation.crafting.filter((g) => g.goal.id.startsWith("station:")),
+}));
 app.post<{ Body: { probeId?: number } }>("/panel-api/stations/create", async (req, reply) =>
   stationCall(reply, async () => ({ station: await stations.makeStation(Number(req.body?.probeId)) })));
 app.post<{ Body: { probeId?: number } }>("/panel-api/stations/remove", async (req, reply) =>
