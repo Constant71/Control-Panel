@@ -65,14 +65,14 @@ export interface DispatchResult {
   noMining: Set<number>;
 }
 
-export function handoffSpace(p: Probe): { cap: number; used: number; free: number; count: number } {
+function handoffSpace(p: Probe): { cap: number; used: number; free: number; count: number } {
   const hs = (p.inventory?.containers ?? []).filter(isHandoffContainer);
   const cap = hs.reduce((s, c) => s + (c.capacity ?? 0), 0);
   const used = hs.reduce((s, c) => s + (c.usedCapacity ?? 0), 0);
   return { cap, used, free: cap - used, count: hs.length };
 }
 
-export function homeRoom(p: Probe, mannies: Schemas["Manny"][]): number {
+function homeRoom(p: Probe, mannies: Schemas["Manny"][]): number {
   const inv = p.inventory;
   if (!inv) return 0;
   const space = Math.max(0, ...inv.items.filter((i) => i.type === "manny").map((i) => i.containerSpace)) || FALLBACK_MANNY_SPACE;

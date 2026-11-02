@@ -157,7 +157,7 @@ export function planService({ snapshot, data, handoffs, busy, recentRefuels }: S
       const inv = M.inventory;
 
       // Hauler routing rules hold at all times, docked or not: Mannies never land in a hand-off container.
-      if ((mem.role === "Hauler" || mem.role === "Miner") && inv) {
+      if (mem.role === "Hauler" && inv) {
         for (const c of inv.containers) {
           if (inFlight.has(c.id)) continue;
           if (c.kind === "container" && !isHandoffContainer(c)) {
@@ -184,7 +184,7 @@ export function planService({ snapshot, data, handoffs, busy, recentRefuels }: S
       const mTake = idlePool(mv);
       let mRoom = spareRoom(M, mv.mannies);
 
-      if (mem.role === "Hauler" || mem.role === "Miner") {
+      if (mem.role === "Hauler") {
         // Hand over full hand-off containers.
         let extra = inv.containers.filter((c) => c.kind === "container").length;
         for (const c of inv.containers) {
@@ -280,8 +280,8 @@ export function planService({ snapshot, data, handoffs, busy, recentRefuels }: S
             });
           }
         }
-      } else if (mem.role !== "Miner") {
-        // Top up docked ferries from the station, never below the station's own fuel floor (a Miner never flies).
+      } else {
+        // Top up docked ferries from the station, never below the station's own fuel floor.
         const mMax = maxFuel(M);
         const pct = (M.fuel.deuterium / mMax) * 100;
         const give = round2(Math.min((cfg.ferryFuelTargetPercent / 100) * mMax - M.fuel.deuterium, sFuel - sFloor - 0.01));

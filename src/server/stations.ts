@@ -20,7 +20,6 @@ import type { SectorKnowledge } from "./discovery.js";
 import { productionGoals, toCraftGoals } from "./production.js";
 import { fleeCard, type FleeApproval } from "./flee.js";
 import { planStationTankers } from "./stationTanker.js";
-import { planStationMiners } from "./stationMiner.js";
 import type { CraftGoal } from "../shared/crafting.js";
 import {
   DEFAULT_STATION, MEMBER_ROLES, ROLE_LABEL, type Check, type FleeCard, type Handoff, type StationOp, type Trip, type MemberRole, type MemberStatus, type StationConfig, type StationLogEntry,
@@ -362,7 +361,7 @@ export class Stations extends EventEmitter {
     const v = this.view(probeId);
     if (!v) throw new StationError(404, `Probe ${probeId} is not in your fleet.`);
     if (this.isStation(probeId)) throw new StationError(400, "A station can't join another station's group.");
-    if (role !== null && !MEMBER_ROLES.includes(role)) throw new StationError(400, "Role must be Hauler, Miner, Tanker, Station Tanker or Scout.");
+    if (role !== null && !MEMBER_ROLES.includes(role)) throw new StationError(400, "Role must be Hauler, Tanker, Station Tanker or Scout.");
     const key = String(probeId);
     const before = this.data.members[key];
     // Leaving the group or changing role ends its trips, so nothing keeps holding or steering it.
@@ -535,10 +534,7 @@ export class Stations extends EventEmitter {
       snapshot, data: this.data, trips: this.data.trips, sectors: this.deps.sectors?.() ?? [], costPerSector: this.deps.costPerSector?.() ?? {},
       busy, recentRefuels: new Set(this.refuels.keys()), now: t,
     });
-    const miners = planStationMiners({ snapshot, data: this.data, status: stationStatus(snapshot, this.data), busy });
-    dispatch.ops.push(...tankers.ops, ...miners.ops);
-    for (const id of miners.noMining) dispatch.noMining.add(id);
-    for (const [k, n] of Object.entries(miners.notes)) (dispatch.notes[Number(k)] ??= []).push(...n);
+    dispatch.ops.push(...tankers.ops);
     dispatch.changes.push(...tankers.changes);
     for (const id of tankers.noMining) dispatch.noMining.add(id);
     for (const [k, n] of Object.entries(tankers.notes)) (dispatch.notes[Number(k)] ??= []).push(...n);
