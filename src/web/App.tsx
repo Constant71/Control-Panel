@@ -80,6 +80,12 @@ export function App() {
         <StatusPill state={state} connected={connected} now={now} />
       </header>
       <main>
+        {state?.storageError && (
+          <div className="card warning pad">
+            <strong>Settings are not being saved.</strong> {state.storageError}. Roles, stations, crafting queues and names will be
+            lost on restart. Update the panel (the container now fixes the data folder's permissions when it starts).
+          </div>
+        )}
         {!state ? (
           <p className="muted pad">Connecting to the panel server…</p>
         ) : route.view === "fleet" ? (

@@ -1,6 +1,9 @@
 import { mkdir, readFile, rename, writeFile } from "node:fs/promises";
 import path from "node:path";
 
+/** Last save failure across all stores, shown as a banner so a read-only data folder is never silent. */
+export const storageHealth: { error: string | null; at: string | null } = { error: null, at: null };
+
 /** Tiny JSON file store with atomic writes. */
 export class JsonStore<T> {
   constructor(
@@ -25,8 +28,11 @@ export class JsonStore<T> {
       const file = path.join(this.dir, this.name);
       await writeFile(file + ".tmp", JSON.stringify(value));
       await rename(file + ".tmp", file);
+      if (storageHealth.error?.includes(this.name)) storageHealth.error = null;
     } catch (err) {
       console.error(`Could not save ${this.name}:`, err);
+      storageHealth.error = `Could not save ${this.name} in ${this.dir}: ${(err as Error).message}`;
+      storageHealth.at = new Date().toISOString();
     }
   }
 }
