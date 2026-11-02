@@ -10,16 +10,19 @@ import { DiscoveriesView } from "./DiscoveriesView";
 import { AutomationView } from "./AutomationView";
 import { BuildsView } from "./BuildsView";
 import { describeManny, describeProbe } from "../shared/activity";
+import { CommsView } from "./CommsView";
+import { ConsoleView } from "./ConsoleView";
+import { callOp } from "./api";
 
 type Route =
   | { view: "fleet" } | { view: "probe"; id: number } | { view: "map" } | { view: "missions" } | { view: "system" }
-  | { view: "problems" } | { view: "discoveries" } | { view: "automation" } | { view: "builds" };
+  | { view: "problems" } | { view: "discoveries" } | { view: "automation" } | { view: "builds" } | { view: "comms" } | { view: "console" };
 
 function parseHash(): Route {
   const h = location.hash.replace(/^#\/?/, "");
   const [v, id] = h.split("/");
   if (v === "probe" && id) return { view: "probe", id: Number(id) };
-  if (v === "map" || v === "missions" || v === "system" || v === "problems" || v === "discoveries" || v === "automation" || v === "builds") return { view: v };
+  if (v === "map" || v === "missions" || v === "system" || v === "problems" || v === "discoveries" || v === "automation" || v === "builds" || v === "comms" || v === "console") return { view: v };
   return { view: "fleet" };
 }
 
@@ -63,7 +66,11 @@ export function App() {
           <a className={route.view === "map" ? "on" : ""} href="#/map">
             Map{state && <Badge n={state.pendingMoves ?? 0} sev="warning" />}
           </a>
+          <a className={route.view === "comms" ? "on" : ""} href="#/comms">
+            Comms{state && <Badge n={state.unreadMessages ?? 0} sev="info" />}
+          </a>
           <a className={route.view === "missions" ? "on" : ""} href="#/missions">Missions</a>
+          <a className={route.view === "console" ? "on" : ""} href="#/console">Console</a>
           <a className={route.view === "system" ? "on" : ""} href="#/system">System</a>
         </nav>
         <StatusPill state={state} connected={connected} now={now} />
@@ -85,6 +92,10 @@ export function App() {
           <AutomationView state={state} now={now} />
         ) : route.view === "builds" ? (
           <BuildsView state={state} now={now} />
+        ) : route.view === "comms" ? (
+          <CommsView state={state} now={now} />
+        ) : route.view === "console" ? (
+          <ConsoleView state={state} />
         ) : route.view === "missions" ? (
           <Missions missions={state.snapshot.missions} />
         ) : (
@@ -265,7 +276,7 @@ function ProbeDetail({ state, id, now }: { state: PanelState; id: number; now: n
           {isFullProbe(d) && <ProbeActivity p={p} d={d} state={state} now={now} />}
           {tab === "mannies" && <MannyTable p={p} state={state} now={now} />}
           {tab === "storage" && isFullProbe(d) && <Storage inv={d.inventory} />}
-          {tab === "alerts" && <Alerts alerts={p.alerts ?? []} warnings={p.damageWarnings ?? []} />}
+          {tab === "alerts" && <Alerts probeId={p.summary.id} alerts={p.alerts ?? []} warnings={p.damageWarnings ?? []} />}
           {tab === "sector" && <SectorView sector={p.sector} />}
         </>
       )}
@@ -402,16 +413,35 @@ function Storage({ inv }: { inv: Schemas["ProbeInventory"] | undefined }) {
   );
 }
 
-function Alerts({ alerts, warnings }: { alerts: Schemas["ProbeDamageWarning"][]; warnings: Schemas["ProbeDamageWarning"][] }) {
+function Alerts({ probeId, alerts, warnings }: { probeId: number; alerts: Schemas["ProbeDamageWarning"][]; warnings: Schemas["ProbeDamageWarning"][] }) {
+  const [err, setErr] = useState<string | null>(null);
   const all = [...alerts.map((a) => ({ kind: "alert", a })), ...warnings.map((a) => ({ kind: "damage warning", a }))];
   if (!all.length) return <p className="muted">No alerts or damage warnings.</p>;
+  const act = async (kind: string, id: number, del: boolean) => {
+    if (del && !window.confirm(`Delete this ${kind}? It can't be undone.`)) return;
+    const base = kind === "alert" ? "/api/probe/{probeId}/alerts/{alertId}" : "/api/probe/{probeId}/damage-warnings/{damageWarningId}";
+    const path: Record<string, number> = kind === "alert" ? { probeId, alertId: id } : { probeId, damageWarningId: id };
+    const r = await callOp(`${del ? "DELETE" : "PATCH"} ${base}`, { path, confirmed: del });
+    setErr(r.ok ? null : r.error);
+  };
+  const markAll = async () => {
+    const r = await callOp("POST /api/probe/{probeId}/alerts/mark-all-read", { path: { probeId } });
+    setErr(r.ok ? null : r.error);
+  };
   return (
     <div className="list">
+      <div className="actions">{alerts.length > 0 && <button onClick={markAll}>Mark all alerts read</button>}</div>
+      {err && <p className="warn-text tiny">{err}</p>}
       {all.map(({ kind, a }) => {
         const x = a as Schemas["ProbeDamageWarning"] & { id?: number; status?: string; message?: string; type?: string };
         return (
           <div key={kind + x.id} className={`card ${x.status === "unread" ? "warning" : ""}`}>
-            <div className="card-h"><span className="tag">{kind}</span><span className="tag">{label(x.type)}</span><span className="muted">{x.status}</span></div>
+            <div className="card-h">
+              <span className="tag">{kind}</span><span className="tag">{label(x.type)}</span><span className="muted">{x.status}</span>
+              <span className="spacer" />
+              {x.status === "unread" && x.id !== undefined && <button className="tiny" onClick={() => act(kind, x.id!, false)}>Mark read</button>}
+              {x.id !== undefined && <button className="tiny" onClick={() => act(kind, x.id!, true)}>Delete</button>}
+            </div>
             <p>{x.message}</p>
           </div>
         );

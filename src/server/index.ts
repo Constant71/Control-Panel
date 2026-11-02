@@ -10,6 +10,9 @@ import { Poller } from "./poller.js";
 import { Fixer } from "./fixer.js";
 import { DiscoveryTracker } from "./discovery.js";
 import { Automation } from "./automation.js";
+import { Manual, type ManualRequest } from "./manual.js";
+import { CommsTracker } from "./comms.js";
+import { OPERATIONS, SPEC_VERSION } from "../shared/operations.gen.js";
 import type { AutomationSettings } from "../shared/automation.js";
 import type { AutoFixMode } from "../shared/problems.js";
 import type { PanelOrder } from "../shared/activity.js";
@@ -36,6 +39,8 @@ const discovery = new DiscoveryTracker(game, config.dataDir, {
 });
 
 const automation = new Automation(game, config.dataDir, () => poller.refreshSoon(3000));
+const manual = new Manual(game, config.dataDir, () => poller.refreshSoon(2000));
+const comms = new CommsTracker(game);
 
 // After every refresh: fix first (urgent), then automation, then scan for discoveries.
 let hooks: Promise<void> = Promise.resolve();
@@ -44,6 +49,7 @@ poller.on("snapshot", (snapshot) => {
     .then(() => fixer.onSnapshot(snapshot))
     .then(() => automation.onSnapshot(snapshot))
     .then(() => discovery.onSnapshot(snapshot))
+    .then(() => comms.onSnapshot(snapshot))
     .catch((err) => app.log.error(err, "post-poll hooks failed"));
 });
 
@@ -74,6 +80,8 @@ function panelState() {
     readySuggestions: automation.suggestions.filter((x) => x.ready && x.kind !== "move_probe").length,
     pendingMoves: automation.suggestions.filter((x) => x.kind === "move_probe").length,
     orders: lastOrders(),
+    unreadMessages: comms.unreadCount,
+    unreadByProbe: Object.fromEntries(Object.entries(comms.unread).map(([k, v]) => [k, v.length])),
     planned: automation.lastPlan.map((a) => ({
       probeId: "probeId" in a.plan ? a.plan.probeId : null, mannyId: "mannyId" in a.plan ? a.plan.mannyId : null, label: a.label, why: a.why,
     })),
@@ -164,6 +172,16 @@ app.get("/panel-api/exploration", async () => ({
   suggestions: automation.suggestions.filter((x) => x.kind === "move_probe"),
 }));
 
+// Manual console: every operation in the spec, checked against the catalog before it is sent.
+app.get("/panel-api/operations", async () => ({ specVersion: SPEC_VERSION, operations: OPERATIONS }));
+app.get("/panel-api/manual-log", async () => ({ log: manual.log.slice().reverse() }));
+app.post<{ Body: ManualRequest }>("/panel-api/call", async (req, reply) => {
+  if (!req.body?.opId) return reply.code(400).send({ error: "opId is required" });
+  const res = await manual.call(req.body);
+  if (/messages/.test(req.body.opId) && req.body.opId !== "GET /api/probe/{probeId}/messages") comms.invalidate(Number(req.body.path?.probeId));
+  return res;
+});
+
 app.get("/panel-api/discoveries", async () => ({ discoveries: discovery.discoveries(), scans: discovery.scans() }));
 
 app.post<{ Body: { keys?: string[] | "all" } }>("/panel-api/discoveries/read", async (req) => {
@@ -194,6 +212,7 @@ app.get("/panel-api/events", (req, reply) => {
   fixer.on("changed", send);
   discovery.on("changed", send);
   automation.on("changed", send);
+  comms.on("changed", send);
   const ping = setInterval(() => reply.raw.write(": ping\n\n"), 25_000);
   req.raw.on("close", () => {
     clearInterval(ping);
@@ -201,6 +220,7 @@ app.get("/panel-api/events", (req, reply) => {
     fixer.off("changed", send);
     discovery.off("changed", send);
     automation.off("changed", send);
+    comms.off("changed", send);
   });
 });
 
@@ -216,7 +236,7 @@ if (webRoot) {
   });
 }
 
-await Promise.all([poller.loadPersisted(), fixer.load(), discovery.load(), automation.load()]);
+await Promise.all([poller.loadPersisted(), fixer.load(), discovery.load(), automation.load(), manual.load()]);
 poller.start();
 await app.listen({ host: "0.0.0.0", port: config.port });
 

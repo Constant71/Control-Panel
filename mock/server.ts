@@ -54,6 +54,18 @@ export function startMock(port = 0, opts: MockOpts = {}) {
     if (p === "/api/me") return json(200, { player: { id: 1, username: "mock", displayName: "Mock", forumAdmin: false, forumModerator: false } }, h);
     if (p === "/api/probes") return json(200, { defaultProbeId: 1, probes: world.summaries }, h);
     if (p === "/api/probe/missions") return json(200, { missions: world.missions }, h);
+    const page = { limit: 50, offset: 0, total: 0 };
+    if (req.method === "GET" && p === "/api/forum/categories") return json(200, { categories: world.forum.categories }, h);
+    if (req.method === "GET" && p === "/api/forum/posts") return json(200, { posts: world.forum.posts, pagination: page }, h);
+    const fp = p.match(/^\/api\/forum\/posts\/(\d+)(\/messages)?$/);
+    if (fp && req.method === "GET") {
+      const post = world.forum.posts.find((x) => x.id === Number(fp[1]));
+      if (!post) return json(404, { error: { code: "not_found", message: "No such post" } }, h);
+      const msgs = world.forum.messages.filter((m) => m.postId === post.id);
+      if (fp[2]) return json(200, { messages: msgs, pagination: page }, h);
+      return json(200, { post, firstMessage: msgs[0] ?? null }, h);
+    }
+    if (req.method === "GET" && p === "/api/probe/messages/sent") return json(200, { messages: [], pagination: page }, h);
     if (p === "/api/crafting-recipes") return json(200, { recipes: world.recipes }, h);
     if (p === "/api/visited-sectors") return json(200, { visitedSectors: world.visited }, h);
     if (p === "/api/sector") {
@@ -97,6 +109,16 @@ export function startMock(port = 0, opts: MockOpts = {}) {
       if (rest === "") return json(200, { probe }, h);
       if (rest === "/mannies") return json(200, { mannies: world.mannies[id] ?? [], nextUsefulRefreshDelayMs: 30_000 }, h);
       if (rest === "/probe-improvements-available") return json(200, { improvements: world.improvements }, h);
+      if (rest === "/messages") {
+        const all = world.messages[id] ?? [];
+        return json(200, { messages: url.searchParams.get("status") === "unread" ? all.filter((m) => m.status === "unread") : all, pagination: page }, h);
+      }
+      if (rest === "/logbook-pages") return json(200, { pages: world.logbook.filter((x) => x.probeId === id).map(({ content: _c, ...s }) => s), pagination: page }, h);
+      const lp = rest.match(/^\/logbook-page\/(\d+)$/);
+      if (lp) {
+        const pg = world.logbook.find((x) => x.id === Number(lp[1]) && x.probeId === id);
+        return pg ? json(200, { page: pg }, h) : json(404, { error: { code: "not_found", message: "No such page" } }, h);
+      }
       if (rest === "/alerts") return json(200, { alerts: [], rules: { storageContainerBreak: {} } }, h);
       if (rest === "/damage-warnings") return json(200, { damageWarnings: world.alerts[id] ?? [] }, h);
       if (rest === "/sector") {

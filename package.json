@@ -4,7 +4,7 @@
   "private": true,
   "type": "module",
   "scripts": {
-    "gen:api": "openapi-typescript spec/openapi.yaml -o src/shared/api-schema.d.ts",
+    "gen:api": "openapi-typescript spec/openapi.yaml -o src/shared/api-schema.d.ts && tsx scripts/gen-operations.ts",
     "dev:server": "tsx watch src/server/index.ts",
     "dev:web": "vite",
     "dev:mock": "tsx mock/server.ts",
@@ -21,10 +21,12 @@
     "react-dom": "^19.3.1"
   },
   "devDependencies": {
+    "@types/js-yaml": "^4.0.9",
     "@types/node": "^26.6.6",
     "@types/react": "^19.3.0",
     "@types/react-dom": "^19.3.0",
     "@vitejs/plugin-react": "^6.1.2",
+    "js-yaml": "^4.3.2",
     "openapi-typescript": "^7.13.0",
     "tsx": "^4.23.15",
     "typescript": "~5.9.0",
