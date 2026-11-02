@@ -52,7 +52,7 @@ function useNow(ms: number) {
 }
 
 /** Reloads the page when the server comes back as a new version (auto-deploy), so the TV never runs stale code. */
-function useReloadOnNewVersion() {
+export function useReloadOnNewVersion() {
   useEffect(() => {
     let first: string | null = null;
     const check = () =>

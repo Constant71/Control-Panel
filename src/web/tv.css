@@ -84,3 +84,11 @@
 .tv-manny-t { flex: 1; min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
 .tv-manny-p { flex: none; color: var(--muted); font-variant-numeric: tabular-nums; }
 .tv-flags { flex: none; }
+
+/* Projector star map (/projector): pure black so everything that isn't data is the wall. */
+.projector { position: fixed; inset: 0; background: #000; overflow: hidden; cursor: none; user-select: none; }
+.projector-canvas { position: absolute; inset: 0; width: 100%; height: 100%; display: block; }
+.projector-wait {
+  position: absolute; inset: 0; display: flex; align-items: center; justify-content: center;
+  color: rgba(200, 215, 240, 0.45); font: 600 3vmin system-ui, sans-serif; letter-spacing: .04em;
+}
