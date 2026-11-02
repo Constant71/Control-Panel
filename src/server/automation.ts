@@ -104,7 +104,7 @@ export interface PlanInput {
   /** Goals a station's production mode adds (after your own queue; an item you queued yourself wins). */
   extraGoals?: Record<string, CraftGoal[]>;
   /** A station's asteroid depot: metals, ice and carbon from that asteroid are mined into it (no travel legs). */
-  depots?: Record<string, MineDepot>;
+  depots?: Record<string, MineDepot[]>;
 }
 
 export interface MineDepot {
@@ -204,8 +204,7 @@ export function planAll({ snapshot, settings, inspected, busy, recipes = [], cra
         : cfg.targets[r] - stock[r] - pending[r];
     const needAll = (r: Resource): number => need(r) + short[r];
 
-    const depot = depots[String(p.id)];
-    let depotRoom = depot?.free ?? 0;
+    const myDepots = (depots[String(p.id)] ?? []).map((d) => ({ ...d }));
     let slots = cfg.maxMiners - miners.length;
     const remaining = new Map(targets.map((t) => [t.id, { ...(t.resourceAmounts ?? { deuterium: 0, metals: 0, ice: 0, carbon_compounds: 0 }) }]));
     while (slots > 0 && spare > 0) {
@@ -216,8 +215,13 @@ export function planAll({ snapshot, settings, inspected, busy, recipes = [], cra
       if (!wanted) break;
       const r = wanted.r;
       const sources = targets.filter((t) => t.resourceTypes.includes(r) && (remaining.get(t.id)?.[r] ?? 0) >= 0.01);
-      // The depot's asteroid comes first for anything a container can hold (deuterium never: it goes to the tank).
-      const intoDepot = !!depot && r !== "deuterium" && depotRoom >= 0.01 && sources.some((t) => t.id === depot.asteroidId);
+      // A depot's asteroid comes first for anything a container can hold (deuterium never: it goes to the tank).
+      // The emptiest depot takes the load, so a nearly full one drains of miners and can come home.
+      const depot = r === "deuterium" ? undefined : myDepots
+        .filter((d) => d.free >= 0.01 && sources.some((t) => t.id === d.asteroidId))
+        .sort((a, b) => b.free - a.free)[0];
+      const intoDepot = !!depot;
+      const depotRoom = depot?.free ?? 0;
       const target = intoDepot
         ? sources.find((t) => t.id === depot!.asteroidId)
         : sources.sort((a, b) => (remaining.get(b.id)![r] ?? 0) - (remaining.get(a.id)![r] ?? 0))[0];
@@ -232,7 +236,7 @@ export function planAll({ snapshot, settings, inspected, busy, recipes = [], cra
       const m = take();
       if (!m) break;
       slots--;
-      if (intoDepot) depotRoom -= amount;
+      if (depot) depot.free -= amount;
       free -= mannySpace + (r === "deuterium" || intoDepot ? 0 : amount);
       pending[r] += amount;
       remaining.get(target.id)![r] -= amount;
@@ -278,7 +282,7 @@ export class Automation extends EventEmitter {
   stationHold: { noExplore: Set<number>; noMining: Set<number> } = { noExplore: new Set(), noMining: new Set() };
   /** Set by Stations each poll: crafting goals from each station's production mode, by probe id. */
   stationGoals: Record<string, CraftGoal[]> = {};
-  stationDepots: Record<string, MineDepot> = {};
+  stationDepots: Record<string, MineDepot[]> = {};
   crafting: GoalStatus[] = [];
   suggestions: Suggestion[] = [];
   improvements: Record<string, Schemas["ProbeImprovement"][]> = {};

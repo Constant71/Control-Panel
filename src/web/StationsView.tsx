@@ -245,18 +245,24 @@ function StationCard({ s, free, recipes, run, goals }: {
         </div>
       </div>
       <p className="muted tiny">
-        A normal mining order flies out, mines and flies back (about 55 min per 0.05 ECE). With the depot, one empty extra container is hidden on
-        the richest asteroid here and Mannies mine metals, ice and carbon straight into it (about 25 min per 0.05 ECE). When it is full it is
-        brought home, emptied into the station's storage, and hidden again. Deuterium can't go into a container, so it still goes to the tank the
+        A normal mining order flies out, mines and flies back (about 55 min per 0.05 ECE). With the depot, empty extra containers are hidden on
+        the richest asteroid here and Mannies mine metals, ice and carbon straight into it (about 25 min per 0.05 ECE). Up to {s.config.depotContainers} are
+        out at once and each load goes to the emptiest; a full one is brought home, emptied into the station's storage, and hidden again. Deuterium can't go into a container, so it still goes to the tank the
         usual way. While it is out, the station is that container's space short; someone inspecting the asteroid could find it.
       </p>
-      {(s.depot || s.depotNote) && (
-        <div className="tiny">
-          {s.depot && <span className="tag auto">{DEPOT_TEXT[s.depot.state]}</span>}{" "}
-          {s.depot && <span className="muted">{s.depot.asteroidName} · {s.depot.contents === null ? "?" : s.depot.contents.toFixed(3)} / {s.depot.capacity} ECE{s.depot.readAt ? ` · read ${ago(s.depot.readAt)}` : ""} </span>}
-          {s.depotNote && <span className={s.depot?.lost ? "warn-text" : "muted"}>{s.depotNote}</span>}
+      {s.depots.length > 0 && (
+        <div className="members">
+          {s.depots.map((d) => (
+            <div key={d.containerId} className="member tiny">
+              <span className="tag auto">{DEPOT_TEXT[d.state]}</span>{" "}
+              <span className={d.lost ? "warn-text" : "muted"}>
+                {d.asteroidName} · {d.contents === null ? "?" : d.contents.toFixed(3)} / {d.capacity} ECE{d.readAt ? ` · read ${ago(d.readAt)}` : ""}{d.lost ? " · can't be found" : ""}
+              </span>
+            </div>
+          ))}
         </div>
       )}
+      {s.depotNote && <p className="tiny muted">{s.depotNote}</p>}
 
       <div className="card-h mt">
         <div className="tiny"><b>Trips</b> <span className="muted">Haulers fetch what the station is short of, inside the SCUT network</span></div>
@@ -389,6 +395,7 @@ function TargetEditor({ cfg, recipes, onSave }: { cfg: StationConfig; recipes: s
   const [stReserve, setStReserve] = useState(cfg.stationTankerReservePercent);
   const [fleeAt, setFleeAt] = useState(cfg.fleeIntegrityPercent);
   const [lend, setLend] = useState(cfg.helperLend);
+  const [depotBoxes, setDepotBoxes] = useState(cfg.depotContainers);
   const [newKind, setNewKind] = useState<"resource" | "item">("resource");
   const [newName, setNewName] = useState("");
   const set = (i: number, min: number) => setTargets(targets.map((t, j) => (j === i ? { ...t, min } : t)));
@@ -424,6 +431,7 @@ function TargetEditor({ cfg, recipes, onSave }: { cfg: StationConfig; recipes: s
           <input type="number" min={0} value={perRole[r]} onChange={(e) => setPerRole({ ...perRole, [r]: Number(e.target.value) })} /><span className="unit" /></div>
       ))}
       <div className="row"><span className="grow">Station Mannies lent to each build helper</span><input type="number" min={0} max={50} value={lend} onChange={(e) => setLend(Number(e.target.value))} /><span className="unit" /></div>
+      <div className="row"><span className="grow">Depot containers hidden at once</span><input type="number" min={1} max={20} value={depotBoxes} onChange={(e) => setDepotBoxes(Number(e.target.value))} /><span className="unit" /></div>
       <div className="row"><span className="grow">Longest stay at a mining sector</span><input type="number" min={1} max={72} value={tripHours} onChange={(e) => setTripHours(Number(e.target.value))} /><span className="unit">h</span></div>
       <div className="row"><span className="grow">Fuel left after a round trip</span><input type="number" min={0} max={90} value={tripMargin} onChange={(e) => setTripMargin(Number(e.target.value))} /><span className="unit">%</span></div>
       <div className="row"><span className="grow">Hand over containers at least this full</span><input type="number" min={1} max={100} value={fill} onChange={(e) => setFill(Number(e.target.value))} /><span className="unit">%</span></div>
@@ -435,7 +443,7 @@ function TargetEditor({ cfg, recipes, onSave }: { cfg: StationConfig; recipes: s
         targets, fuelFloorPercent: fuel, mannyTarget: mannies, mannyPerRole: perRole,
         handoffMinFillPercent: fill, containersPerHauler: boxes, ferryFuelTargetPercent: ferryFuel, tankerReservePercent: reserve,
         maxTripHours: tripHours, tripFuelMarginPercent: tripMargin, fleeIntegrityPercent: fleeAt, stationTankerReservePercent: stReserve,
-        helperLend: lend,
+        helperLend: lend, depotContainers: depotBoxes,
       })}>Save settings</button>
     </div>
   );

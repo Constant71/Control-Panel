@@ -318,15 +318,17 @@ already has an item, your goal is used instead of the station's.
 - **Asteroid depot (on by default, per station):** a plain mine order flies out, mines and flies back, about 55 min per
   0.05 ECE with the game defaults. The spec's `MannyMineRequest.targetContainerId` says that mining into a container
   hidden on the asteroid being mined drops the travel time. So the station does this:
-  1. It hides its largest empty extra container on the richest asteroid in its sector (`detach-storage-container`, mode
+  1. It hides up to "Depot containers hidden at once" (default 4), one per poll, on the richest asteroid in its sector (`detach-storage-container`, mode
      `hidden_on_asteroid`). It only uses a container that still leaves room for the Mannies outside, and never one a
      hand-off is using.
-  2. The mining automation sends metals, ice and carbon from that asteroid into it (`targetContainerId`). These orders
+  2. The mining automation sends metals, ice and carbon from that asteroid into the emptiest depot (`targetContainerId`),
+     so a nearly full one stops getting miners and can come home while the others keep taking loads. These orders
      need no cargo room aboard. Deuterium can't go into a container, so it still goes to the tank the usual way.
   3. How full it is comes from `GET /sector-objects/{objectId}/inventory`, read every 2 minutes.
   4. When it is full, its asteroid is gone, or the depot is switched off, the panel waits until nobody is mining into it,
      because recovery drops their cargo. Then it brings the container home (`recover-storage-container`).
-  5. It empties the container into the station's other storage (`storage-moves`) and hides it again.
+  5. It empties the container into the station's other storage (`storage-moves`), filling containers already in use
+     first, and hides it again.
 
   If the inventory read returns 404, nothing more is mined into the depot and the Stations page says so. While the
   station flees or moves, the depot stays where it is until the station is back.
