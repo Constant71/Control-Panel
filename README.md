@@ -140,6 +140,45 @@ refresh, so fixes always get first pick of idle Mannies.
   critical, because the Manny can be left behind. While the move is still
   preparing, it is auto-cancelled with `DELETE /api/probe/{id}/move`.
 
+### What each probe and Manny is doing
+
+The probe page shows what each probe and Manny is doing, in plain words, built
+from what the API returns:
+
+- **Manny tasks:** mining target, amount, split and travel time, plus what's left
+  on the asteroid; the 7-day storage-wait countdown; the parts a craft used; the
+  object being inspected or salvaged; time left.
+- **Probe moves:** route, phase, fuel reserved and arrival time.
+- **The panel's own orders:** who ordered it (automation, auto-fix, or you), when,
+  and why. Also shown is what the next refresh will do for that probe.
+- **Raw task fields:** "All task data from the API" lists every field.
+
+## Step 3c: Exploration (Map page)
+
+Turn on **Explore** per probe on the Automation page. You can also set how long
+it stays in each sector, its fuel floor and its minimum integrity. An explorer
+then works like this:
+
+1. It works its sector for the dwell time. Dormant constructs are inspected
+   before it leaves.
+2. It scans the 12 neighbouring sectors of the FCC grid with
+   `GET /api/sector?x&y&z`, every 30 minutes. It picks the best unvisited,
+   unclaimed one: a star, planets and SCUT coverage count in its favour; black
+   holes, danger and navigational risk count against it.
+3. It only goes if fuel after the jump stays above your floor. The cost is
+   learned from `Probe.movement.fuelCostDeuterium` on earlier moves.
+4. Whether it waits for you depends on command range (`ProbeSummary.isReachable`):
+   - **Stays in range** (SCUT network shared with the default probe, or joining
+     its sector), and the scan isn't flagged as dangerous: the move runs by
+     itself with `POST /api/probe/{id}/move`.
+   - **Would leave range**, or the scan flags danger: a confirm card appears on
+     the Map page and the probe keeps working meanwhile. After you confirm, it
+     stops new outside work, waits for every Manny to be aboard, then moves. The
+     OK lasts 24 hours.
+5. It never leaves a Manny behind. While any Manny is outside, it waits. If a
+   Manny is in another sector or waiting for storage, it says so and points to
+   the Problems page instead of leaving.
+
 ## Develop
 
 ```bash
@@ -156,5 +195,5 @@ The mock (`mock/`) is typed against the generated schema too, so it can't drift 
 
 1. Foundation and read-only live view
 2. Problems page with automatic fixes, fix log, discoveries
-3. 24/7 automation: 3a mining, construct inspection, naming; 3b crafting and probe-build suggestions (this); 3c exploration. Rules (mining, crafting, repair, deuterium, storage, exploration within SCUT range, inspecting dormant constructs, probe-build suggestions, automatic naming)
+3. 24/7 automation: 3a mining, construct inspection, naming; 3b crafting and probe-build suggestions; 3c exploration (this). Rules (mining, crafting, repair, deuterium, storage, exploration within SCUT range, inspecting dormant constructs, probe-build suggestions, automatic naming)
 4. Remaining endpoints as manual controls, plus messaging, logbook and forum

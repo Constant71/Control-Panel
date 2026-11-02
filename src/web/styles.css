@@ -136,3 +136,15 @@ button.primary { background: var(--accent); color: #031018; border-color: var(--
 .addgoal select, .addgoal input[type=number] { background: var(--panel2); color: var(--text); border: 1px solid var(--line); border-radius: 6px; padding: 5px 8px; font: inherit; }
 .addgoal input[type=number] { width: 80px; }
 details summary { cursor: pointer; }
+
+/* Activity detail */
+td.doing { min-width: 240px; max-width: 420px; }
+.why { margin-top: 3px; color: var(--accent); }
+.info-text { color: var(--info); }
+.taskmix { margin-top: 2px; }
+dl.raw { margin: 4px 0 0; display: grid; gap: 1px; }
+dl.raw > div { display: flex; gap: 8px; }
+dl.raw dt { color: var(--muted, #8b98a5); min-width: 140px; word-break: break-all; }
+dl.raw dd { margin: 0; word-break: break-all; }
+.tag.ex-needs_you { color: var(--warn); border-color: var(--warn); }
+.tag.ex-moving { color: var(--good); }

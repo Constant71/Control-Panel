@@ -61,7 +61,7 @@ export interface KitLine {
 
 export interface Suggestion {
   id: string;
-  kind: "assemble_probe" | "install_improvement";
+  kind: "assemble_probe" | "install_improvement" | "move_probe";
   probeId: number;
   probeName: string;
   title: string;
@@ -79,6 +79,7 @@ export interface Suggestion {
   containerIds: string[];
   model?: "generic" | "deuterium_tanker";
   improvement?: string;
+  target?: { x: number; y: number; z: number };
   durationSeconds: number;
   endpoint: string;
 }

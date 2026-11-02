@@ -202,7 +202,8 @@ export class Fixer extends EventEmitter {
   ): FixLogEntry {
     const entry: FixLogEntry = {
       at: new Date(this.now()).toISOString(), problemKey: p.key, problemTitle: p.title, fixId: f.id, label: f.label,
-      endpoint: f.endpoint, initiator, dryRun, ok, status, code, message,
+      endpoint: f.endpoint, initiator, dryRun, ok, status, code, message, why: f.why,
+      mannyId: f.plan && "mannyId" in f.plan ? f.plan.mannyId : f.plan && "actorMannyId" in f.plan ? f.plan.actorMannyId : null,
     };
     this.state.log.push(entry);
     if (this.state.log.length > LOG_SIZE) this.state.log.splice(0, this.state.log.length - LOG_SIZE);

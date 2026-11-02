@@ -23,6 +23,8 @@ import type { AutoFixMode } from "../shared/problems.js";
 import type { CraftGoal, GoalStatus, Suggestion, TrackedCraft } from "../shared/crafting.js";
 import { planCrafting, liveCrafts, type Recipe } from "./crafting.js";
 import { buildSuggestions } from "./builds.js";
+import { planExploration, exploringProbes, fccNeighbors, vkey, type ExploreResult } from "./exploration.js";
+import type { ExploreStatus } from "../shared/exploration.js";
 
 const MAX_ACTIONS_PER_CYCLE = 10;
 const MAX_RENAMES_PER_CYCLE = 5;
@@ -42,6 +44,12 @@ interface State {
   recipes: Recipe[];
   recipesAt: string | null;
   crafts: TrackedCraft[];
+  /** Per probe: sector key and when it was first seen settled there. */
+  settled: Record<string, { key: string; since: string }>;
+  /** Deuterium points per sector of distance, learned from moves the API reported. */
+  costPerSector: Record<string, number>;
+  /** Moves Merchant confirmed but not yet sent (waiting for Mannies to come aboard). */
+  approvedMoves: Record<string, { key: string; at: string }>;
 }
 
 const defaultState = (): State => ({
@@ -55,7 +63,13 @@ const defaultState = (): State => ({
   recipes: [],
   recipesAt: null,
   crafts: [],
+  settled: {},
+  costPerSector: {},
+  approvedMoves: {},
 });
+
+const SCAN_REFRESH_MS = 30 * 60_000;
+const SCANS_PER_CYCLE = 12;
 
 const RECIPE_REFRESH_MS = 6 * 3600_000;
 const IMPROVEMENTS_REFRESH_MS = 30 * 60_000;
@@ -85,6 +99,8 @@ export interface PlanInput {
   busy: Set<string>;
   recipes?: Recipe[];
   crafts?: TrackedCraft[];
+  /** Probes about to explore elsewhere: no new outside work for their Mannies. */
+  departing?: Set<number>;
 }
 
 /** Pure planner: what the automation would do right now. */
@@ -92,7 +108,7 @@ export function planAutomation(input: PlanInput): AutomationAction[] {
   return planAll(input).actions;
 }
 
-export function planAll({ snapshot, settings, inspected, busy, recipes = [], crafts = [] }: PlanInput): { actions: AutomationAction[]; crafting: GoalStatus[] } {
+export function planAll({ snapshot, settings, inspected, busy, recipes = [], crafts = [], departing = new Set() }: PlanInput): { actions: AutomationAction[]; crafting: GoalStatus[] } {
   const actions: AutomationAction[] = [];
   const crafting: GoalStatus[] = [];
   for (const v of snapshot.probes) {
@@ -152,7 +168,7 @@ export function planAll({ snapshot, settings, inspected, busy, recipes = [], cra
     }
 
     // 3. Mining toward stock targets (plus crafting shortfalls), only with room for every Manny to come home.
-    if (!cfg.mining || moving) continue;
+    if (!cfg.mining || moving || departing.has(p.id)) continue;
     const targets = mineableTargets(v.sector);
     if (!targets.length) continue;
     if (!inv) continue;
@@ -235,6 +251,9 @@ export class Automation extends EventEmitter {
   crafting: GoalStatus[] = [];
   suggestions: Suggestion[] = [];
   improvements: Record<string, Schemas["ProbeImprovement"][]> = {};
+  exploration: ExploreStatus[] = [];
+  private explore: ExploreResult | null = null;
+  private scans: Record<string, { at: number; sector: Schemas["SectorObservation"] }> = {};
   private improvementsAt: Record<string, number> = {};
   private lastSnapshot: Snapshot | null = null;
 
@@ -314,11 +333,25 @@ export class Automation extends EventEmitter {
       return e;
     };
     if (!sug) return fail("This suggestion no longer applies.");
-    if (!sug.ready || !sug.mannyId) return fail(sug.blockers.join(" ") || "Not ready.");
+    if (!sug.ready || (!sug.mannyId && sug.kind !== "move_probe")) return fail(sug.blockers.join(" ") || "Not ready.");
+    if (sug.kind === "move_probe") {
+      // Approval, not an immediate send: the move goes out once every Manny is aboard (checked each refresh).
+      this.state.approvedMoves[String(sug.probeId)] = { key: `${sug.target!.x},${sug.target!.y},${sug.target!.z}`, at: new Date(this.now()).toISOString() };
+      const e: AutomationLogEntry = {
+        at: new Date(this.now()).toISOString(), actionId: `approve:${id}`, label: `${sug.title} (approved by you)`, endpoint: sug.endpoint,
+        dryRun: false, ok: true, status: null, code: null, message: "Approved. It's sent as soon as every Manny is aboard; this check runs each refresh.",
+        why: sug.why.join(" "), probeId: sug.probeId, mannyId: null,
+      };
+      this.state.log.push(e);
+      await this.store.save(this.state);
+      this.replan();
+      this.onActed();
+      return e;
+    }
     const plan: AutomationPlan = sug.kind === "assemble_probe"
-      ? { kind: "assemble", probeId: sug.probeId, mannyId: sug.mannyId, model: sug.model!, containerIds: sug.containerIds }
-      : { kind: "improve", probeId: sug.probeId, mannyId: sug.mannyId, improvement: sug.improvement! };
-    const action: AutomationAction = { id: `confirm:${id}`, label: `${sug.mannyName}: ${sug.title} (confirmed)`, why: sug.why.join(" "), endpoint: endpointOf(plan), plan };
+      ? { kind: "assemble", probeId: sug.probeId, mannyId: sug.mannyId!, model: sug.model!, containerIds: sug.containerIds }
+      : { kind: "improve", probeId: sug.probeId, mannyId: sug.mannyId!, improvement: sug.improvement! };
+    const action: AutomationAction = { id: `confirm:${id}`, label: `${sug.mannyName ? `${sug.mannyName}: ` : ""}${sug.title} (confirmed)`, why: sug.why.join(" "), endpoint: endpointOf(plan), plan };
     await this.execute(action, false);
     delete this.state.failures[action.id]; // a confirmed action can be retried right away
     if (sug.kind === "install_improvement") delete this.improvementsAt[String(sug.probeId)];
@@ -339,14 +372,72 @@ export class Automation extends EventEmitter {
   private replan(): void {
     if (!this.lastSnapshot) return;
     const busy = recentlyOrdered(this.now());
+    this.explore = this.planExplore(this.lastSnapshot);
     const r = planAll({
       snapshot: this.lastSnapshot, settings: this.state.settings, inspected: new Set(this.state.inspected), busy,
-      recipes: this.state.recipes, crafts: this.state.crafts,
+      recipes: this.state.recipes, crafts: this.state.crafts, departing: this.explore.departing,
     });
     this.lastPlan = r.actions;
     this.crafting = r.crafting;
-    this.suggestions = buildSuggestions({ snapshot: this.lastSnapshot, improvements: this.improvements, busy: recentlyOrdered(this.now()) });
+    this.suggestions = [
+      ...buildSuggestions({ snapshot: this.lastSnapshot, improvements: this.improvements, busy: recentlyOrdered(this.now()) }),
+      ...this.explore.suggestions,
+    ];
     this.emit("changed");
+  }
+
+  private planExplore(snapshot: Snapshot): ExploreResult {
+    const r = planExploration({
+      snapshot, settings: this.state.settings,
+      scans: Object.fromEntries(Object.entries(this.scans).map(([k, v]) => [k, v.sector])),
+      settledSince: Object.fromEntries(Object.entries(this.state.settled).map(([k, v]) => [k, v.since])),
+      costPerSector: this.state.costPerSector, inspected: new Set(this.state.inspected), now: this.now(),
+      approved: this.state.approvedMoves,
+    });
+    this.exploration = r.status;
+    return r;
+  }
+
+  /** Tracks how long each probe has sat in its sector, and learns move costs from Probe.movement. */
+  private observeMoves(snapshot: Snapshot): void {
+    const t = new Date(this.now()).toISOString();
+    for (const v of snapshot.probes) {
+      if (!isFullProbe(v.detail)) continue;
+      const p = v.detail;
+      const mv = p.movement;
+      if (mv && mv.distance > 0 && mv.fuelCostDeuterium > 0) {
+        const per = Math.ceil(mv.fuelCostDeuterium / mv.distance);
+        this.state.costPerSector[p.model] = Math.max(this.state.costPerSector[p.model] ?? 0, per);
+      }
+      const moving = !!mv && !["arrived", "failed", "destroyed"].includes(mv.status);
+      const pos = p.sector?.relative;
+      if (moving || !pos) delete this.state.settled[String(p.id)];
+      else if (this.state.settled[String(p.id)]?.key !== vkey(pos)) this.state.settled[String(p.id)] = { key: vkey(pos), since: t };
+    }
+  }
+
+  /** Neighbour scans for exploring probes (GET /api/sector), refreshed every 30 minutes. */
+  private async scanNeighbours(snapshot: Snapshot): Promise<void> {
+    const t = this.now();
+    let budget = SCANS_PER_CYCLE;
+    const visited = new Set(snapshot.visitedSectors.map((s) => vkey(s.relativeCoordinates)));
+    for (const v of exploringProbes(snapshot, this.state.settings)) {
+      const pos = v.detail?.sector?.relative;
+      if (!pos) continue;
+      for (const n of fccNeighbors(pos)) {
+        const k = vkey(n);
+        if (visited.has(k) || (this.scans[k] && t - this.scans[k].at < SCAN_REFRESH_MS)) continue;
+        if (budget-- <= 0) return;
+        try {
+          const res = unwrap(await this.game.poll.GET("/api/sector", { params: { query: n } }));
+          this.scans[k] = { at: t, sector: res.sector };
+        } catch {
+          /* insufficient_scan_data and friends: try again next window */
+          this.scans[k] = { at: t - SCAN_REFRESH_MS + 5 * 60_000, sector: this.scans[k]?.sector as Schemas["SectorObservation"] };
+          if (!this.scans[k].sector) delete this.scans[k];
+        }
+      }
+    }
   }
 
   private async refreshReference(snapshot: Snapshot): Promise<void> {
@@ -385,7 +476,9 @@ export class Automation extends EventEmitter {
     if (patch.probes)
       for (const [id, p] of Object.entries(patch.probes)) {
         if (p.role && !ROLES.includes(p.role)) delete p.role;
-        s.probes[id] = { ...(s.probes[id] ?? {}), ...p };
+        const merged = { ...(s.probes[id] ?? {}), ...p };
+        const clean = sanitize({ ...s.defaults, ...merged, targets: { ...s.defaults.targets, ...(merged.targets ?? {}) } }) as unknown as Record<string, unknown>;
+        s.probes[id] = Object.fromEntries(Object.keys(merged).map((k) => [k, clean[k]])) as Partial<ProbeAutomationSettings>;
       }
     if (Array.isArray(patch.lockedNames)) s.lockedNames = patch.lockedNames.map(String);
     await this.store.save(this.state);
@@ -399,8 +492,14 @@ export class Automation extends EventEmitter {
     this.lastSnapshot = snapshot;
     await this.refreshReference(snapshot);
     this.state.crafts = liveCrafts(this.state.crafts, snapshot.probes, t);
+    this.observeMoves(snapshot);
+    await this.scanNeighbours(snapshot);
+    this.explore = this.planExplore(snapshot);
     const busy = recentlyOrdered(t);
-    const all = planAll({ snapshot, settings: s, inspected: new Set(this.state.inspected), busy, recipes: this.state.recipes, crafts: this.state.crafts });
+    const all = planAll({
+      snapshot, settings: s, inspected: new Set(this.state.inspected), busy, recipes: this.state.recipes, crafts: this.state.crafts,
+      departing: this.explore.departing,
+    });
     this.lastPlan = all.actions;
     this.crafting = all.crafting;
     // One-off goals that are reached leave the queue.
@@ -409,13 +508,23 @@ export class Automation extends EventEmitter {
         const q = s.craftQueue[String(st.probeId)];
         if (q) s.craftQueue[String(st.probeId)] = q.filter((g) => g.id !== st.goal.id);
       }
-    this.suggestions = buildSuggestions({ snapshot, improvements: this.improvements, busy: new Set(busy) });
+    this.suggestions = [...buildSuggestions({ snapshot, improvements: this.improvements, busy: new Set(busy) }), ...this.explore.suggestions];
     this.renames = planRenames(snapshot, (id) => settingsFor(s, id).role, new Set(s.lockedNames));
 
     let acted = false;
     if (s.mode !== "off") {
       const dry = s.mode === "dry_run";
       let n = 0;
+      // In-range exploration moves (Merchant: these run on their own).
+      for (const m of this.explore.moves) {
+        const plan: AutomationPlan = { kind: "move", probeId: m.probeId, target: m.target };
+        const id = `move:${m.probeId}:${vkey(m.target)}`;
+        if (this.backedOff(id, t)) continue;
+        if (await this.execute({ id, label: m.label, why: m.why, endpoint: endpointOf(plan), plan }, dry) && !dry) {
+          acted = true;
+          delete this.state.approvedMoves[String(m.probeId)];
+        }
+      }
       for (const a of this.lastPlan) {
         if (n >= MAX_ACTIONS_PER_CYCLE) break;
         if (this.backedOff(a.id, t)) continue;
@@ -474,6 +583,7 @@ export class Automation extends EventEmitter {
     const t = this.now();
     const entry: AutomationLogEntry = {
       at: new Date(t).toISOString(), actionId: a.id, label: a.label, endpoint: a.endpoint, dryRun, ok: true, status: null, code: null, message: null,
+      why: a.why, probeId: "probeId" in a.plan ? a.plan.probeId : null, mannyId: "mannyId" in a.plan ? a.plan.mannyId : null,
     };
     try {
       if (!dryRun) {
@@ -530,6 +640,9 @@ export class Automation extends EventEmitter {
           body: { model: plan.model, containerIds: plan.containerIds },
         });
         break;
+      case "move":
+        r = await c.POST("/api/probe/{probeId}/move", { params: { path: { probeId: plan.probeId } }, body: { target: plan.target } });
+        break;
       case "improve":
         r = await c.POST("/api/probe/{probeId}/mannies/{mannyId}/improve-probe", {
           params: { path: { probeId: plan.probeId, mannyId: plan.mannyId } },
@@ -572,6 +685,7 @@ function endpointOf(plan: AutomationPlan): string {
     case "print": return `POST /api/probe/${plan.probeId}/atomic-printer/craft`;
     case "assemble": return `POST /api/probe/${plan.probeId}/mannies/${plan.mannyId}/assemble-probe`;
     case "improve": return `POST /api/probe/${plan.probeId}/mannies/${plan.mannyId}/improve-probe`;
+    case "move": return `POST /api/probe/${plan.probeId}/move`;
     case "rename_probe": return `PATCH /api/probe/${plan.probeId}`;
     case "rename_manny": return `PATCH /api/probe/${plan.probeId}/mannies/${plan.mannyId}`;
     case "rename_container": return `PATCH /api/probe/${plan.probeId}/storage-containers/${plan.containerId}`;
@@ -586,6 +700,10 @@ function sanitize(p: ProbeAutomationSettings): ProbeAutomationSettings {
     maxMiners: Math.round(n(p.maxMiners, 0, 500, 20)),
     keepIdle: Math.round(n(p.keepIdle, 0, 50, 1)),
     orderAmount: n(p.orderAmount, 0.01, 5, 0.1),
+    explore: !!p.explore,
+    exploreDwellMinutes: Math.round(n(p.exploreDwellMinutes, 0, 10080, 60)),
+    exploreMinFuelPercent: Math.round(n(p.exploreMinFuelPercent, 10, 100, 50)),
+    exploreMinIntegrity: Math.round(n(p.exploreMinIntegrity, 10, 100, 40)),
     targets: {
       metals: n(p.targets.metals, 0, 100, 0.3),
       ice: n(p.targets.ice, 0, 100, 0.2),

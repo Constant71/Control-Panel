@@ -90,6 +90,14 @@ export function buildWorld() {
     1: [
       manny("mny_a1", "manny-1", {
         currentTask: "mining", taskProgressPercent: 55, taskStartTime: iso(-1_800_000), taskEstimatedEndTime: iso(1_500_000),
+        task: {
+          objectId: "asteroid-metal-1", resourceType: "metals", resourceTypes: ["metals"], targetAmount: 0.1, depositedAmount: 0,
+          depositedResources: [], extractedAmount: 0, extractedResources: [], availableResources: ["metals"],
+          resourceComposition: { deuterium: 0, metals: 1, ice: 0, carbon_compounds: 0 },
+          resourceProfile: { deuterium: 0, metals: 1, ice: 0, carbon_compounds: 0 }, miningTravelSeconds: 300,
+          target: { id: "asteroid-metal-1", type: "asteroid", name: "Metal 3b91", resourceTypes: ["metals"],
+            resourceAmounts: { deuterium: 0, metals: 2.9, ice: 0, carbon_compounds: 0 } },
+        } as unknown as S["Manny"]["task"],
         location: { type: "sector", sector: { relative: { x: 0, y: 0, z: 0 } } }, canReceiveOrders: false,
       }),
       manny("mny_a2", "manny-2", {
@@ -143,6 +151,17 @@ export function buildWorld() {
          { id: "station-1", type: "deuterium_refuel_station", name: "Refuel station" } as S["SectorObject"]]
       : [],
   });
+  // Unvisited sectors answer with a passive neighbour scan: a promising one, a dangerous one, the rest plain.
+  const neighborScan = (v: { x: number; y: number; z: number }): S["SectorObservation"] => {
+    const k = `${v.x},${v.y},${v.z}`;
+    const est = k === "1,-1,0" ? { star: true, planetCountMin: 3, planetCountMax: 7, blackHoleProbability: 0.01, dangerEstimate: "low" }
+      : k === "-1,1,0" ? { star: true, planetCountMin: 0, planetCountMax: 2, blackHoleProbability: 0.2, dangerEstimate: "high" }
+      : { star: false, blackHoleProbability: 0, dangerEstimate: "low" };
+    return {
+      relativeCoordinates: v, distance: 1, knowledgeLevel: "neighbor_scan", confidence: 0.82, scutCoverageStatus: "unknown",
+      estimatedObjects: est, scan: { currentSectorResidenceSeconds: 1832, requiredResidenceSeconds: 300, scanQuality: 1 },
+    };
+  };
   const improvements = [
     { id: "deuterium_compression", name: "Deuterium compression", description: "Compresses the tank.", available: true, done: false,
       installableOnProbe: true, durationSeconds: 300, ingredients: [], effects: {} },
@@ -176,5 +195,5 @@ export function buildWorld() {
     recipe("micro_conductor", "atomic_3d_printer", [ing("metals", 0.005)], 600, 0.001),
     recipe("electric_motor", "manny", [ing("steel_bar", 1), ing("micro_conductor", 1)], 900, 0.01),
   ];
-  return { probes, farProbe, summaries, mannies, alerts, sector, visited, missions, visitedSectorObs, improvements, recipes };
+  return { probes, farProbe, summaries, mannies, alerts, sector, visited, missions, visitedSectorObs, neighborScan, improvements, recipes };
 }
