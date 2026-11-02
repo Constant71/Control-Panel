@@ -219,7 +219,31 @@ stations, so this is panel-only data (`data/stations.json`). It only changes whi
 - **Checks** on each card: in reach, default probe, SCUT network, moving, fuel floor, group probes out of reach or
   without a role.
 
-Production, hand-offs, dispatch trips, flee cards and station stuck fixes follow in 5b to 5e.
+## Step 5b: Docked service (container hand-offs and refuelling)
+
+When a group probe and its station are in the same sector and neither is moving (the spec's rule for every
+probe-to-probe exchange), the station services it. Each step can be switched off per station and follows the
+automation mode (auto, dry run, off).
+
+- **Hauler container rules, at all times:** additional containers become hand-off containers (cargo first,
+  `strictExclusion: [manny]`), and the probe core becomes the Mannies' home (`priority: [manny]`), via
+  `PATCH .../storage-containers/{id}/rules`. A Manny never ends up in a container that is about to be handed over.
+- **Full containers to the station:** a Hauler's hand-off container that is at least 80% full is detached with
+  `mode: attach_to_probe` to the station. It is skipped if a Manny is inside, or if removing it would leave no
+  room for Mannies still outside. A `409 storage_container_reserved` triggers
+  `crafting-reservations/reassign`, then one retry.
+- **Empties back:** the station gives empty containers to the Hauler, up to 2 each (never more than 4, the movement
+  link risk), but only if the station keeps room for its own Mannies outside.
+- **Arrival:** the spec doesn't say whether an attached container lands in the receiver's storage or stays in the
+  sector. The panel watches both: if a new detached container appears in the sector, the receiver recovers it
+  (`recover-storage-container`). Hand-offs that never arrive are flagged on the station card after 2 hours.
+- **Refuelling:** `transfer-deuterium-to-probe` tops docked probes up to 90%, while the station stays above its fuel
+  floor. A docked Tanker tops the station up and keeps 30% for itself. Amounts stay strictly below the source's tank,
+  as the spec requires.
+- No Idempotency-Key is sent: the spec doesn't list one for these endpoints. A detach can't be doubled anyway,
+  because the container leaves the sender's inventory as soon as the order is accepted.
+
+Dispatch trips, production modes, flee cards and station stuck fixes follow in 5c to 5e.
 
 ## Develop
 
@@ -239,5 +263,5 @@ The mock (`mock/`) is typed against the generated schema too, so it can't drift 
 2. Problems page with automatic fixes, fix log, discoveries
 3. 24/7 automation: 3a mining, construct inspection, naming; 3b crafting and probe-build suggestions; 3c exploration. Rules (mining, crafting, repair, deuterium, storage, exploration within SCUT range, inspecting dormant constructs, probe-build suggestions, automatic naming)
 4. Remaining endpoints as manual controls, plus messaging, logbook and forum
-5. Stations (from the Stations design): 5a designation, groups and stock targets (this); 5b container hand-offs and
-   refuelling while docked; 5c dispatch loop and hauler trips; 5d production modes; 5e flee cards and stuck fixes
+5. Stations (from the Stations design): 5a designation, groups and stock targets; 5b container hand-offs and
+   refuelling while docked (this); 5c dispatch loop and hauler trips; 5d production modes; 5e flee cards and stuck fixes

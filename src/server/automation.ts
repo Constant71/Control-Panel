@@ -33,7 +33,7 @@ const FAIL_BACKOFF_MS = 15 * 60_000;
 /** Spec (MannyMineRequest.targetAmount): one Manny trip carries 0.05 ECE. */
 const TRIP = 0.05;
 /** Fallback when the inventory doesn't list a Manny item to read its containerSpace from. */
-const FALLBACK_MANNY_SPACE = 0.05;
+export const FALLBACK_MANNY_SPACE = 0.05;
 
 interface State {
   settings: AutomationSettings;
@@ -232,7 +232,7 @@ export function planAll({ snapshot, settings, inspected, busy, recipes = [], cra
 function taskOf(m: Schemas["Manny"]): Record<string, unknown> {
   return Array.isArray(m.task) || !m.task ? {} : (m.task as Record<string, unknown>);
 }
-function pendingCargo(m: Schemas["Manny"]): number {
+export function pendingCargo(m: Schemas["Manny"]): number {
   const c = m.cargo;
   const carried = c.metals + c.ice + c.organicCompounds;
   if (m.currentTask !== "mining") return carried;

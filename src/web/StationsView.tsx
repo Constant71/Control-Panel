@@ -138,7 +138,7 @@ function StationCard({ s, free, recipes, run }: {
           </select>
         </label>
       </div>
-      <p className="muted tiny">{MODE_TEXT[s.config.mode]} Production starts in a later step; for now this page tracks stock and the group.</p>
+      <p className="muted tiny">{MODE_TEXT[s.config.mode]} Production starts in a later step.</p>
 
       <div className="tiny"><b>Checks</b>{bad > 0 && <span className="warn-text"> · {bad} to look at</span>}</div>
       <ul className="plain tiny">
@@ -154,7 +154,7 @@ function StationCard({ s, free, recipes, run }: {
       <div className="card-h mt">
         <div className="tiny"><b>Stock against targets</b></div>
         <span className="spacer" />
-        <button className="tiny" onClick={() => setEditing(!editing)}>{editing ? "Done" : "Edit targets"}</button>
+        <button className="tiny" onClick={() => setEditing(!editing)}>{editing ? "Done" : "Edit settings"}</button>
       </div>
       <div className="targets">
         {s.targets.map((t) => {
@@ -181,6 +181,34 @@ function StationCard({ s, free, recipes, run }: {
         {s.members.map((m) => <MemberRow key={m.probeId} m={m} stationId={s.probeId} run={run} />)}
       </div>
       <AddMember stationId={s.probeId} free={free} run={run} />
+
+      <div className="card-h mt">
+        <div className="tiny"><b>Docked service</b> <span className="muted">hand-offs and refuelling while a group probe is in this sector</span></div>
+        <span className="spacer" />
+        <div className="mode">
+          <button className={s.config.service ? "on" : ""} onClick={() => update({ service: true })}>on</button>
+          <button className={!s.config.service ? "on" : ""} onClick={() => update({ service: false })}>off</button>
+        </div>
+      </div>
+      <p className="muted tiny">
+        Haulers hand over containers at least {s.config.handoffMinFillPercent}% full and get empties back (up to {s.config.containersPerHauler} each).
+        Docked probes are topped up to {s.config.ferryFuelTargetPercent}% while the station stays above {s.config.fuelFloorPercent}%.
+        Tankers top the station up and keep {s.config.tankerReservePercent}% for themselves. A container holding a Manny is never handed over.
+      </p>
+      {s.next.length > 0 ? (
+        <ul className="plain tiny">
+          {s.next.map((o) => <li key={o.id}><b>Next:</b> {o.label} <span className="muted">· {o.why}</span></li>)}
+        </ul>
+      ) : <p className="muted tiny">Nothing to do right now.</p>}
+      {s.handoffs.length > 0 && (
+        <ul className="plain tiny">
+          {s.handoffs.slice(0, 8).map((h) => (
+            <li key={h.id} className={h.state === "failed" ? "warn-text" : h.state === "done" ? "ok-text" : ""}>
+              {h.purpose === "full" ? "Full" : "Empty"} container {h.containerId}: {h.state}{h.note ? ` · ${h.note}` : ""}
+            </li>
+          ))}
+        </ul>
+      )}
 
       <div className="row wrap mt tiny">
         <span className="muted">Remove the station: its group probes go back to normal automation.</span>
@@ -251,6 +279,10 @@ function TargetEditor({ cfg, recipes, onSave }: { cfg: StationConfig; recipes: s
   const [fuel, setFuel] = useState(cfg.fuelFloorPercent);
   const [mannies, setMannies] = useState(cfg.mannyTarget);
   const [perRole, setPerRole] = useState(cfg.mannyPerRole);
+  const [fill, setFill] = useState(cfg.handoffMinFillPercent);
+  const [boxes, setBoxes] = useState(cfg.containersPerHauler);
+  const [ferryFuel, setFerryFuel] = useState(cfg.ferryFuelTargetPercent);
+  const [reserve, setReserve] = useState(cfg.tankerReservePercent);
   const [newKind, setNewKind] = useState<"resource" | "item">("resource");
   const [newName, setNewName] = useState("");
   const set = (i: number, min: number) => setTargets(targets.map((t, j) => (j === i ? { ...t, min } : t)));
@@ -284,7 +316,14 @@ function TargetEditor({ cfg, recipes, onSave }: { cfg: StationConfig; recipes: s
         <div key={r} className="row"><span className="grow">Mannies per {r}</span>
           <input type="number" min={0} value={perRole[r]} onChange={(e) => setPerRole({ ...perRole, [r]: Number(e.target.value) })} /><span className="unit" /></div>
       ))}
-      <button onClick={() => onSave({ targets, fuelFloorPercent: fuel, mannyTarget: mannies, mannyPerRole: perRole })}>Save targets</button>
+      <div className="row"><span className="grow">Hand over containers at least this full</span><input type="number" min={1} max={100} value={fill} onChange={(e) => setFill(Number(e.target.value))} /><span className="unit">%</span></div>
+      <div className="row"><span className="grow">Containers per Hauler (max 4)</span><input type="number" min={0} max={4} value={boxes} onChange={(e) => setBoxes(Number(e.target.value))} /><span className="unit" /></div>
+      <div className="row"><span className="grow">Top up docked probes to</span><input type="number" min={0} max={100} value={ferryFuel} onChange={(e) => setFerryFuel(Number(e.target.value))} /><span className="unit">%</span></div>
+      <div className="row"><span className="grow">Tanker keeps at least</span><input type="number" min={0} max={100} value={reserve} onChange={(e) => setReserve(Number(e.target.value))} /><span className="unit">%</span></div>
+      <button onClick={() => onSave({
+        targets, fuelFloorPercent: fuel, mannyTarget: mannies, mannyPerRole: perRole,
+        handoffMinFillPercent: fill, containersPerHauler: boxes, ferryFuelTargetPercent: ferryFuel, tankerReservePercent: reserve,
+      })}>Save settings</button>
     </div>
   );
 }

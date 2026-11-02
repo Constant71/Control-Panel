@@ -12,8 +12,11 @@ import { JsonStore } from "./store.js";
 import { stockOf } from "./crafting.js";
 import { isFullProbe } from "../shared/attention.js";
 import type { ProbeRole } from "../shared/automation.js";
+import type { AutoFixMode } from "../shared/problems.js";
+import { markOrdered, recentlyOrdered } from "./orders.js";
+import { detachedContainersIn, planService, sanitizeService, trackHandoffs } from "./stationOps.js";
 import {
-  DEFAULT_STATION, MEMBER_ROLES, type Check, type MemberRole, type MemberStatus, type StationConfig, type StationLogEntry,
+  DEFAULT_STATION, MEMBER_ROLES, type Check, type Handoff, type StationOp, type MemberRole, type MemberStatus, type StationConfig, type StationLogEntry,
   type StationMode, type StationStatus, type StationsData, type StockTarget, type TargetStatus,
 } from "../shared/stations.js";
 
@@ -25,7 +28,17 @@ const MAX_LOG = 500;
 interface StoredData extends StationsData {
   /** Probe ids seen so far, so a newly assembled probe can join the station it was built at. */
   knownProbes: number[] | null;
+  handoffs: Handoff[];
+  /** Op id -> retry-after ISO, after a refused call. */
+  failures: Record<string, string>;
 }
+
+const MAX_OPS_PER_CYCLE = 6;
+const FAIL_BACKOFF_MS = 10 * 60_000;
+/** A deuterium transfer takes five minutes (spec); don't send another to the same pair meanwhile. */
+const REFUEL_GAP_MS = 7 * 60_000;
+const RULES_GAP_MS = 30 * 60_000;
+const emptyData = (): StoredData => ({ stations: [], members: {}, log: [], knownProbes: null, handoffs: [], failures: {} });
 
 export class StationError extends Error {
   constructor(readonly status: number, message: string) {
@@ -77,7 +90,7 @@ const clamp = (v: unknown, lo: number, hi: number, dflt: number) => {
 };
 
 /** Read-only picture of every station: stock against targets, group, and readiness checks. */
-export function stationStatus(snapshot: Snapshot, data: StationsData): StationStatus[] {
+export function stationStatus(snapshot: Snapshot, data: StationsData, next: StationOp[] = [], handoffs: Handoff[] = []): StationStatus[] {
   const views = new Map(snapshot.probes.map((v) => [v.summary.id, v]));
   return data.stations.map((cfg) => {
     const v = views.get(cfg.probeId);
@@ -152,6 +165,11 @@ export function stationStatus(snapshot: Snapshot, data: StationsData): StationSt
     }
     const lost = members.filter((m) => !m.reachable).length;
     if (lost) checks.push({ ok: false, text: `${lost} group probe${lost > 1 ? "s are" : " is"} out of command range.` });
+    const dayAgo = Date.now() - 86_400_000;
+    for (const h of handoffs)
+      if (h.stationId === cfg.probeId && h.state === "failed" && new Date(h.updatedAt).getTime() > dayAgo)
+        checks.push({ ok: false, text: `Hand-off of ${h.containerId} failed: ${h.note ?? "unknown reason"}` });
+    if (!cfg.service) checks.push({ ok: true, text: "Docked service is off: no hand-offs or refuelling." });
     const unassigned = members.filter((m) => !m.role).length;
     if (unassigned) checks.push({ ok: false, text: `${unassigned} group probe${unassigned > 1 ? "s have" : " has"} no role yet.` });
 
@@ -170,6 +188,8 @@ export function stationStatus(snapshot: Snapshot, data: StationsData): StationSt
       targets,
       members,
       checks,
+      next: next.filter((o) => o.stationId === cfg.probeId),
+      handoffs: handoffs.filter((h) => h.stationId === cfg.probeId).slice(-20).reverse(),
     };
   });
 }
@@ -180,19 +200,32 @@ export interface StationsDeps {
   snapshot: () => Snapshot;
   onActed?: () => void;
   now?: () => number;
+  /** The automation mode (auto / dry_run / off) also governs docked service. */
+  mode?: () => AutoFixMode;
 }
 
 export class Stations extends EventEmitter {
   private readonly store: JsonStore<StoredData>;
-  private data: StoredData = { stations: [], members: {}, log: [], knownProbes: null };
+  private data: StoredData = emptyData();
+  /** What docked service planned on the last poll. */
+  next: StationOp[] = [];
+  private readonly refuels = new Map<string, number>();
+  /** Rules updates sent recently: if the next poll still shows old rules, wait before sending again. */
+  private readonly rulesSent = new Map<string, number>();
 
   constructor(private readonly game: Game, dataDir: string | undefined, private readonly deps: StationsDeps) {
     super();
-    this.store = new JsonStore<StoredData>(dataDir, "stations.json", () => ({ stations: [], members: {}, log: [], knownProbes: null }));
+    this.store = new JsonStore<StoredData>(dataDir, "stations.json", emptyData);
   }
 
   async load(): Promise<void> {
     this.data = await this.store.load();
+    // Stations saved before a setting existed get its default.
+    this.data.stations = this.data.stations.map((st) => ({ ...structuredClone(DEFAULT_STATION), ...st }));
+  }
+
+  get handoffs(): Handoff[] {
+    return this.data.handoffs;
   }
 
   get stations(): StationConfig[] {
@@ -212,7 +245,7 @@ export class Stations extends EventEmitter {
   }
 
   status(): StationStatus[] {
-    return stationStatus(this.deps.snapshot(), this.data);
+    return stationStatus(this.deps.snapshot(), this.data, this.next, this.data.handoffs);
   }
 
   private now(): number {
@@ -270,6 +303,7 @@ export class Stations extends EventEmitter {
     if (patch.mannyTarget !== undefined) cfg.mannyTarget = clamp(patch.mannyTarget, 0, 500, cfg.mannyTarget);
     if (patch.mannyPerRole && typeof patch.mannyPerRole === "object")
       for (const r of MEMBER_ROLES) if (r in patch.mannyPerRole) cfg.mannyPerRole[r] = clamp(patch.mannyPerRole[r], 0, 100, cfg.mannyPerRole[r]);
+    sanitizeService(cfg, patch, clamp);
     await this.save();
     return cfg;
   }
@@ -342,9 +376,104 @@ export class Stations extends EventEmitter {
         changed = true;
       }
     }
-    const next = [...new Set([...(this.data.knownProbes ?? []), ...ids])].sort((a, b) => a - b);
-    if (next.length !== (this.data.knownProbes?.length ?? -1)) changed = true;
-    this.data.knownProbes = next;
+    const known = [...new Set([...(this.data.knownProbes ?? []), ...ids])].sort((a, b) => a - b);
+    if (known.length !== (this.data.knownProbes?.length ?? -1)) changed = true;
+    this.data.knownProbes = known;
+
+    // Docked service (5b).
+    const t = this.now();
+    for (const { h, note, ok } of trackHandoffs(snapshot, this.data.handoffs, t)) {
+      this.addLog({ stationId: h.stationId, probeId: h.toProbeId, label: `Hand-off of ${h.containerId}: ${h.state}`, endpoint: null, ok, message: note });
+      changed = true;
+    }
+    if (this.data.handoffs.length > 200) this.data.handoffs.splice(0, this.data.handoffs.length - 200);
+    for (const [k, at] of this.refuels) if (t - at > REFUEL_GAP_MS) this.refuels.delete(k);
+    this.next = planService({
+      snapshot, data: this.data, handoffs: this.data.handoffs, busy: recentlyOrdered(t), recentRefuels: new Set(this.refuels.keys()),
+    });
+    const mode = this.deps.mode?.() ?? "auto";
+    let acted = false;
+    if (mode !== "off") {
+      let n = 0;
+      for (const op of this.next) {
+        if (n >= MAX_OPS_PER_CYCLE) break;
+        const retry = this.data.failures[op.id];
+        if (retry && new Date(retry).getTime() > t) continue;
+        if (op.plan.kind === "rules" && t - (this.rulesSent.get(op.id) ?? -Infinity) < RULES_GAP_MS) continue;
+        n++;
+        changed = true;
+        if (await this.execute(op, snapshot, mode === "dry_run")) acted ||= mode === "auto";
+      }
+    }
     if (changed) await this.save();
+    else this.emit("changed");
+    if (acted) this.deps.onActed?.();
+  }
+
+  private async execute(op: StationOp, snapshot: Snapshot, dry: boolean): Promise<boolean> {
+    const t = this.now();
+    const plan = op.plan;
+    if (dry) {
+      this.addLog({ stationId: op.stationId, probeId: plan.probeId, label: op.label, endpoint: op.endpoint, ok: true, message: "Dry run: not sent." });
+      return true;
+    }
+    const c = this.game.action;
+    try {
+      switch (plan.kind) {
+        case "rules":
+          unwrap(await c.PATCH("/api/probe/{probeId}/storage-containers/{containerId}/rules", {
+            params: { path: { probeId: plan.probeId, containerId: plan.containerId } }, body: plan.rules,
+          }));
+          this.rulesSent.set(op.id, t);
+          break;
+        case "detach": {
+          const send = () => c.POST("/api/probe/{probeId}/mannies/{mannyId}/detach-storage-container", {
+            params: { path: { probeId: plan.probeId, mannyId: plan.mannyId } },
+            body: { containerId: plan.containerId, mode: "attach_to_probe", objectId: String(plan.toProbeId) },
+          });
+          const before = detachedContainersIn(snapshot.probes.find((v) => v.summary.id === plan.toProbeId));
+          let r = await send();
+          if (r.response.status === 409 && (r.error as { error?: { code?: string } } | undefined)?.error?.code === "storage_container_reserved") {
+            // A craft holds space in it: move the reservation to another container, then try once more.
+            unwrap(await c.POST("/api/probe/{probeId}/storage-containers/{containerId}/crafting-reservations/reassign", {
+              params: { path: { probeId: plan.probeId, containerId: plan.containerId } },
+            }));
+            this.addLog({ stationId: op.stationId, probeId: plan.probeId, label: `Moved crafting reservations off ${plan.containerId} before the hand-off`,
+              endpoint: `POST /api/probe/${plan.probeId}/storage-containers/${plan.containerId}/crafting-reservations/reassign`, ok: true, message: null });
+            r = await send();
+          }
+          unwrap(r);
+          const at = new Date(t).toISOString();
+          this.data.handoffs.push({
+            id: `${plan.containerId}@${t}`, stationId: op.stationId, containerId: plan.containerId, fromProbeId: plan.probeId, toProbeId: plan.toProbeId,
+            purpose: plan.purpose, state: "sent", at, updatedAt: at, sectorBefore: before, note: null,
+          });
+          break;
+        }
+        case "recover": {
+          unwrap(await c.POST("/api/probe/{probeId}/mannies/{mannyId}/recover-storage-container", {
+            params: { path: { probeId: plan.probeId, mannyId: plan.mannyId } }, body: { objectId: plan.objectId },
+          }));
+          const h = this.data.handoffs.find((x) => x.id === plan.handoffId);
+          if (h) Object.assign(h, { state: "recovering", updatedAt: new Date(t).toISOString(), note: "Recovering it from the sector." });
+          break;
+        }
+        case "refuel":
+          unwrap(await c.POST("/api/probe/{probeId}/mannies/{mannyId}/transfer-deuterium-to-probe", {
+            params: { path: { probeId: plan.probeId, mannyId: plan.mannyId } }, body: { targetProbeId: plan.targetProbeId, amount: plan.amount },
+          }));
+          this.refuels.set(`${plan.probeId}:${plan.targetProbeId}`, t);
+          break;
+      }
+      if ("mannyId" in plan) markOrdered(plan.mannyId, t);
+      delete this.data.failures[op.id];
+      this.addLog({ stationId: op.stationId, probeId: plan.probeId, label: op.label, endpoint: op.endpoint, ok: true, message: null });
+      return true;
+    } catch (err) {
+      const message = err instanceof GameError ? `${err.status} ${err.code}: ${err.message}` : String(err);
+      this.data.failures[op.id] = new Date(t + FAIL_BACKOFF_MS).toISOString();
+      this.addLog({ stationId: op.stationId, probeId: plan.probeId, label: op.label, endpoint: op.endpoint, ok: false, message: `${message} (retrying in 10 min)` });
+      return false;
+    }
   }
 }

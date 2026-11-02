@@ -25,7 +25,53 @@ export interface StationConfig {
   mannyTarget: number;
   /** Mannies each group probe of that role should carry. */
   mannyPerRole: Record<MemberRole, number>;
+  /** Docked service (5b): container hand-offs and refuelling while a group probe is docked. */
+  service: boolean;
+  /** A hand-off container goes to the station once it is at least this full. */
+  handoffMinFillPercent: number;
+  /** Additional containers each Hauler should carry (never more than 4: movement link risk). */
+  containersPerHauler: number;
+  /** Docked group probes are topped up to this percent of their tank. */
+  ferryFuelTargetPercent: number;
+  /** A docked Tanker never gives the station fuel below this percent of its own tank. */
+  tankerReservePercent: number;
   createdAt: string;
+}
+
+export interface StorageRules {
+  priority?: string[];
+  exclusion?: string[];
+  strictExclusion?: string[];
+}
+
+export type StationOpPlan =
+  | { kind: "rules"; probeId: number; containerId: string; rules: StorageRules }
+  | { kind: "detach"; probeId: number; mannyId: string; containerId: string; toProbeId: number; purpose: "full" | "empty" }
+  | { kind: "refuel"; probeId: number; mannyId: string; targetProbeId: number; amount: number }
+  | { kind: "recover"; probeId: number; mannyId: string; objectId: string; handoffId: string };
+
+export interface StationOp {
+  id: string;
+  stationId: number;
+  label: string;
+  why: string;
+  endpoint: string;
+  plan: StationOpPlan;
+}
+
+export interface Handoff {
+  id: string;
+  stationId: number;
+  containerId: string;
+  fromProbeId: number;
+  toProbeId: number;
+  purpose: "full" | "empty";
+  state: "sent" | "recovering" | "done" | "failed";
+  at: string;
+  updatedAt: string;
+  /** detached_container objects already in the sector when the detach was sent. */
+  sectorBefore: string[];
+  note: string | null;
 }
 
 export interface StationMember {
@@ -98,6 +144,9 @@ export interface StationStatus {
   targets: TargetStatus[];
   members: MemberStatus[];
   checks: Check[];
+  /** What docked service would do next, with reasons. */
+  next: StationOp[];
+  handoffs: Handoff[];
 }
 
 export const DEFAULT_STATION: Omit<StationConfig, "probeId" | "createdAt"> = {
@@ -110,6 +159,11 @@ export const DEFAULT_STATION: Omit<StationConfig, "probeId" | "createdAt"> = {
   fuelFloorPercent: 60,
   mannyTarget: 12,
   mannyPerRole: { Hauler: 6, Tanker: 2, Scout: 2 },
+  service: true,
+  handoffMinFillPercent: 80,
+  containersPerHauler: 2,
+  ferryFuelTargetPercent: 90,
+  tankerReservePercent: 30,
 };
 
 export const MODE_LABEL: Record<StationMode, string> = {
