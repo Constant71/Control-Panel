@@ -19,7 +19,8 @@ behind each feature, see the [README](../README.md).
 11. [Missions](#missions)
 12. [Console](#console)
 13. [System, debug export and updates](#system-debug-export-and-updates)
-14. [Everyday recipes](#everyday-recipes)
+14. [TV dashboard](#tv-dashboard)
+15. [Everyday recipes](#everyday-recipes)
 
 ---
 
@@ -417,6 +418,26 @@ Once the cron job from the README is set up, the server checks for a new version
 when there is one. If the new version fails its checks, the running panel stays as it is. You can see which version
 is running under *Panel version* on this page, and the history is in `auto-update.log` on the server. Your `.env`
 and saved data are never touched.
+
+## TV dashboard
+
+Open `http://<your server>:8184/tv` in your kiosk browser. It's a view-only page made for a 1080p TV (it scales to
+other sizes) with no buttons and no scrolling. It updates on its own and never sends anything to the game.
+
+- **Top bar:** probes, busy Mannies, critical problems, warnings, builds waiting for you, new discoveries, whether
+  automation is off or in dry run, the connection light and a clock.
+- **Probe tiles:** status, integrity, deuterium, storage, resources aboard, what the probe is doing, where it is,
+  and each Manny's task, worst first. Probes that need attention come first. With more than 16 probes the tiles
+  page through every 15 seconds; the dots under the grid show which page is up.
+- **Alerts:** open problems (marked *auto-fixing* when the panel is already on it) and unread in-game alerts.
+- **Stock:** fleet totals of metals, ice, carbon and deuterium, plus each station's stock against its targets.
+- **Builds & crafting:** builds waiting for your OK, assemblies under way and the crafting queue with each
+  goal's current step.
+- **Discoveries:** new finds first, potential blueprints highlighted.
+
+Lists that don't fit are cut off at the bottom; the number next to each heading is the full count. Confirm builds
+and moves from the normal pages. When the server updates itself, the TV page reloads within 5 minutes. If you set a
+panel password, the kiosk browser has to log in once like any other browser.
 
 ---
 
