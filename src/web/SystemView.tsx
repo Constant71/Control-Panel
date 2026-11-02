@@ -30,7 +30,9 @@ export function SystemView({ state, now }: { state: PanelState; now: number }) {
           <Row k="Last poll" v={`${ago(s.lastPollFinishedAt, now)} (${s.lastPollDurationMs ?? "—"} ms)`} />
           <Row k="Next poll" v={until(s.nextPollAt, now)} />
           <Row k="Polls since start" v={s.pollCount} />
-          <button onClick={() => fetch("panel-api/refresh", { method: "POST" })}>Refresh now</button>
+          <button onClick={() => fetch("panel-api/refresh", { method: "POST" })}>Refresh now</button>{" "}
+          <a className="button" href="panel-api/diagnostics" download>Download debug export</a>
+          <p className="muted tiny">One JSON file with what the panel saw from the game and what it did (API calls, problems, automation, stations). The API key and panel password are removed. Send it when something looks wrong.</p>
         </div>
         <div className="card">
           <strong>Rate limit</strong>

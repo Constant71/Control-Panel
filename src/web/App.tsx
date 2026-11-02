@@ -12,17 +12,18 @@ import { BuildsView } from "./BuildsView";
 import { describeManny, describeProbe } from "../shared/activity";
 import { CommsView } from "./CommsView";
 import { ConsoleView } from "./ConsoleView";
+import { StationsView } from "./StationsView";
 import { callOp } from "./api";
 
 type Route =
   | { view: "fleet" } | { view: "probe"; id: number } | { view: "map" } | { view: "missions" } | { view: "system" }
-  | { view: "problems" } | { view: "discoveries" } | { view: "automation" } | { view: "builds" } | { view: "comms" } | { view: "console" };
+  | { view: "problems" } | { view: "discoveries" } | { view: "automation" } | { view: "builds" } | { view: "comms" } | { view: "console" } | { view: "stations" };
 
 function parseHash(): Route {
   const h = location.hash.replace(/^#\/?/, "");
   const [v, id] = h.split("/");
   if (v === "probe" && id) return { view: "probe", id: Number(id) };
-  if (v === "map" || v === "missions" || v === "system" || v === "problems" || v === "discoveries" || v === "automation" || v === "builds" || v === "comms" || v === "console") return { view: v };
+  if (v === "map" || v === "missions" || v === "system" || v === "problems" || v === "discoveries" || v === "automation" || v === "builds" || v === "comms" || v === "console" || v === "stations") return { view: v };
   return { view: "fleet" };
 }
 
@@ -63,6 +64,9 @@ export function App() {
           <a className={route.view === "builds" ? "on" : ""} href="#/builds">
             Builds{state && <Badge n={state.readySuggestions ?? 0} sev="info" />}
           </a>
+          <a className={route.view === "stations" ? "on" : ""} href="#/stations">
+            Stations{state && <Badge n={state.stationWarnings ?? 0} sev="warning" />}
+          </a>
           <a className={route.view === "map" ? "on" : ""} href="#/map">
             Map{state && <Badge n={state.pendingMoves ?? 0} sev="warning" />}
           </a>
@@ -94,6 +98,8 @@ export function App() {
           <BuildsView state={state} now={now} />
         ) : route.view === "comms" ? (
           <CommsView state={state} now={now} />
+        ) : route.view === "stations" ? (
+          <StationsView state={state} now={now} />
         ) : route.view === "console" ? (
           <ConsoleView state={state} />
         ) : route.view === "missions" ? (
@@ -250,6 +256,7 @@ function ProbeDetail({ state, id, now }: { state: PanelState; id: number; now: n
       <p><a href="#/">← Fleet</a></p>
       <div className="detail-top">
         <ProbeCard p={p} isDefault={p.summary.id === state.snapshot.defaultProbeId} now={now} />
+        <StationLine state={state} id={id} />
         {p.errors.length > 0 && (
           <div className="card">
             <strong>Read errors on last poll</strong>
@@ -278,6 +285,35 @@ function ProbeDetail({ state, id, now }: { state: PanelState; id: number; now: n
           {tab === "storage" && isFullProbe(d) && <Storage inv={d.inventory} />}
           {tab === "alerts" && <Alerts probeId={p.summary.id} alerts={p.alerts ?? []} warnings={p.damageWarnings ?? []} />}
           {tab === "sector" && <SectorView sector={p.sector} />}
+        </>
+      )}
+    </div>
+  );
+}
+
+/** Station membership on the probe page, with a "Make station" button (Stations design). */
+function StationLine({ state, id }: { state: PanelState; id: number }) {
+  const [err, setErr] = useState<string | null>(null);
+  const isStation = (state.stationIds ?? []).includes(id);
+  const member = state.stationMembers?.[String(id)];
+  const stationName = (sid: number) => state.snapshot.probes.find((v) => v.summary.id === sid)?.summary.name ?? `Probe ${sid}`;
+  return (
+    <div className="card">
+      <strong>Station</strong>
+      {isStation ? (
+        <p className="tiny">This probe is a station. It never gets automatic move orders. <a href="#/stations">Open the Stations page</a>.</p>
+      ) : member ? (
+        <p className="tiny">In {stationName(member.stationId)}'s group as <b>{member.role ?? "no role yet"}</b>. Change the role on the <a href="#/stations">Stations page</a>.</p>
+      ) : (
+        <>
+          <p className="tiny muted">Not part of a station. A station stays put and works as a production hub for its own group of probes.</p>
+          <button onClick={async () => {
+            if (!window.confirm("Make this probe a station? It will never get automatic move orders, and its role becomes Station. Nothing is sent to the game.")) return;
+            const r = await fetch("panel-api/stations/create", { method: "POST", headers: { "Content-Type": "application/json" }, body: JSON.stringify({ probeId: id }) });
+            if (r.ok) location.hash = "#/stations";
+            else setErr((await r.json().catch(() => ({}))).error ?? `HTTP ${r.status}`);
+          }}>Make station</button>
+          {err && <p className="tiny warn-text">{err}</p>}
         </>
       )}
     </div>

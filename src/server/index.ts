@@ -12,7 +12,10 @@ import { DiscoveryTracker } from "./discovery.js";
 import { Automation } from "./automation.js";
 import { Manual, type ManualRequest } from "./manual.js";
 import { CommsTracker } from "./comms.js";
+import { Stations, StationError } from "./stations.js";
+import type { MemberRole, StationConfig } from "../shared/stations.js";
 import { OPERATIONS, SPEC_VERSION } from "../shared/operations.gen.js";
+import { redact, diagnosticsFilename } from "./diagnostics.js";
 import type { AutomationSettings } from "../shared/automation.js";
 import type { AutoFixMode } from "../shared/problems.js";
 import type { PanelOrder } from "../shared/activity.js";
@@ -41,12 +44,29 @@ const discovery = new DiscoveryTracker(game, config.dataDir, {
 const automation = new Automation(game, config.dataDir, () => poller.refreshSoon(3000));
 const manual = new Manual(game, config.dataDir, () => poller.refreshSoon(2000));
 const comms = new CommsTracker(game);
+const stations = new Stations(game, config.dataDir, {
+  setRole: async (probeId, role) => {
+    await automation.updateSettings({ probes: { [String(probeId)]: { role } } });
+  },
+  snapshot: () => poller.snapshot,
+  onActed: () => poller.refreshSoon(2000),
+  mode: () => automation.settings.mode,
+  sectors: () => discovery.sectorKnowledge(),
+  costPerSector: () => automation.costPerSector,
+  hold: (noExplore, noMining) => {
+    automation.stationHold = { noExplore, noMining };
+  },
+  goals: (byProbe) => {
+    automation.stationGoals = byProbe;
+  },
+});
 
 // After every refresh: fix first (urgent), then automation, then scan for discoveries.
 let hooks: Promise<void> = Promise.resolve();
 poller.on("snapshot", (snapshot) => {
   hooks = hooks
     .then(() => fixer.onSnapshot(snapshot))
+    .then(() => stations.onSnapshot(snapshot))
     .then(() => automation.onSnapshot(snapshot))
     .then(() => discovery.onSnapshot(snapshot))
     .then(() => comms.onSnapshot(snapshot))
@@ -81,6 +101,9 @@ function panelState() {
     pendingMoves: automation.suggestions.filter((x) => x.kind === "move_probe").length,
     orders: lastOrders(),
     unreadMessages: comms.unreadCount,
+    stationIds: stations.stations.map((x) => x.probeId),
+    stationMembers: stations.members,
+    stationWarnings: stations.status().reduce((n, x) => n + x.checks.filter((c) => !c.ok).length, 0),
     unreadByProbe: Object.fromEntries(Object.entries(comms.unread).map(([k, v]) => [k, v.length])),
     planned: automation.lastPlan.map((a) => ({
       probeId: "probeId" in a.plan ? a.plan.probeId : null, mannyId: "mannyId" in a.plan ? a.plan.mannyId : null, label: a.label, why: a.why,
@@ -182,11 +205,73 @@ app.post<{ Body: ManualRequest }>("/panel-api/call", async (req, reply) => {
   return res;
 });
 
+// Stations (panel-only designation; see src/server/stations.ts).
+const stationCall = async (reply: { code: (n: number) => { send: (b: unknown) => unknown } }, fn: () => Promise<unknown>) => {
+  try {
+    return await fn();
+  } catch (err) {
+    if (err instanceof StationError) return reply.code(err.status).send({ error: err.message });
+    throw err;
+  }
+};
+app.get("/panel-api/stations", async () => ({
+  stations: stations.status(),
+  log: stations.log.slice(-200).reverse(),
+  // How the crafting planner is doing on each station's production goals.
+  production: automation.crafting.filter((g) => g.goal.id.startsWith("station:")),
+}));
+app.post<{ Body: { probeId?: number } }>("/panel-api/stations/create", async (req, reply) =>
+  stationCall(reply, async () => ({ station: await stations.makeStation(Number(req.body?.probeId)) })));
+app.post<{ Body: { probeId?: number } }>("/panel-api/stations/remove", async (req, reply) =>
+  stationCall(reply, async () => (await stations.removeStation(Number(req.body?.probeId)), { ok: true })));
+app.post<{ Body: { probeId?: number; patch?: Partial<StationConfig> } }>("/panel-api/stations/update", async (req, reply) =>
+  stationCall(reply, async () => ({ station: await stations.updateStation(Number(req.body?.probeId), req.body?.patch ?? {}) })));
+app.post<{ Body: { probeId?: number; stationId?: number | null; role?: MemberRole | null } }>("/panel-api/stations/member", async (req, reply) =>
+  stationCall(reply, async () => {
+    const b = req.body ?? {};
+    await stations.setMember(Number(b.probeId), b.stationId == null ? null : Number(b.stationId), b.role ?? null);
+    return { ok: true };
+  }));
+app.post<{ Body: { probeId?: number } }>("/panel-api/stations/make-default", async (req, reply) =>
+  stationCall(reply, async () => stations.makeDefault(Number(req.body?.probeId))));
+app.post<{ Body: { probeId?: number; target?: { x: number; y: number; z: number } } }>("/panel-api/stations/flee", async (req, reply) =>
+  stationCall(reply, async () => {
+    const t = req.body?.target;
+    if (!t) throw new StationError(400, "Pick a destination.");
+    await stations.confirmFlee(Number(req.body?.probeId), { x: Number(t.x), y: Number(t.y), z: Number(t.z) });
+    return { ok: true, message: "Flee confirmed: Mannies outside in this sector are recalled first, then the station moves." };
+  }));
+app.post<{ Body: { probeId?: number } }>("/panel-api/stations/flee-cancel", async (req, reply) =>
+  stationCall(reply, async () => (await stations.cancelFlee(Number(req.body?.probeId)), { ok: true, message: "Flee cancelled." })));
+
 app.get("/panel-api/discoveries", async () => ({ discoveries: discovery.discoveries(), scans: discovery.scans() }));
 
 app.post<{ Body: { keys?: string[] | "all" } }>("/panel-api/discoveries/read", async (req) => {
   await discovery.markRead(req.body?.keys ?? "all");
   return { ok: true };
+});
+
+// One-file debug export (System page). Everything the panel saw and did, with secrets removed.
+app.get("/panel-api/diagnostics", async (_req, reply) => {
+  const bundle = {
+    exportedAt: new Date().toISOString(),
+    specVersion: SPEC_VERSION,
+    gameBaseUrl: config.gameBaseUrl,
+    state: panelState(),
+    snapshot: poller.snapshot,
+    apiLog: game.log,
+    problems: { mode: fixer.mode, problems: fixer.problems, attempts: fixer.attempts, log: fixer.log.slice(-300) },
+    automation: {
+      settings: automation.settings, plan: automation.lastPlan, log: automation.log.slice(-300),
+      crafting: automation.crafting, suggestions: automation.suggestions, exploration: automation.exploration,
+    },
+    stations: { status: stations.status(), log: stations.log.slice(-200), trips: stations.trips, handoffs: stations.handoffs },
+    discoveries: { discoveries: discovery.discoveries(), scans: discovery.scans() },
+    manualLog: manual.log.slice(-200),
+  };
+  reply.header("Content-Disposition", `attachment; filename="${diagnosticsFilename()}"`);
+  reply.type("application/json");
+  return JSON.stringify(redact(bundle, [config.gameApiKey, config.panelPassword]), null, 1);
 });
 
 app.get("/panel-api/api-log", async () => ({ entries: game.log.slice().reverse() }));
@@ -213,6 +298,7 @@ app.get("/panel-api/events", (req, reply) => {
   discovery.on("changed", send);
   automation.on("changed", send);
   comms.on("changed", send);
+  stations.on("changed", send);
   const ping = setInterval(() => reply.raw.write(": ping\n\n"), 25_000);
   req.raw.on("close", () => {
     clearInterval(ping);
@@ -221,6 +307,7 @@ app.get("/panel-api/events", (req, reply) => {
     discovery.off("changed", send);
     automation.off("changed", send);
     comms.off("changed", send);
+    stations.off("changed", send);
   });
 });
 
@@ -236,7 +323,7 @@ if (webRoot) {
   });
 }
 
-await Promise.all([poller.loadPersisted(), fixer.load(), discovery.load(), automation.load(), manual.load()]);
+await Promise.all([poller.loadPersisted(), fixer.load(), discovery.load(), automation.load(), manual.load(), stations.load()]);
 poller.start();
 await app.listen({ host: "0.0.0.0", port: config.port });
 

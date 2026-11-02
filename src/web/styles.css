@@ -9,6 +9,8 @@ a { color: var(--accent); text-decoration: none; }
 code { font-family: ui-monospace, SFMono-Regular, Menlo, monospace; font-size: 12px; }
 button { background: var(--panel2); color: var(--text); border: 1px solid var(--line); border-radius: 6px; padding: 6px 10px; font: inherit; cursor: pointer; }
 button:hover { border-color: var(--accent); }
+a.button { display: inline-block; background: var(--panel2); color: var(--text); border: 1px solid var(--line); border-radius: 6px; padding: 6px 10px; text-decoration: none; }
+a.button:hover { border-color: var(--accent); }
 .muted { color: var(--muted); }
 .tiny { font-size: 12px; }
 .pad { padding: 12px 16px 32px; }
@@ -171,3 +173,22 @@ button.danger { background: var(--crit); color: #1a0306; border-color: var(--cri
 .clickable { cursor: pointer; }
 .clickable:hover { border-color: var(--accent); }
 .console code { word-break: break-all; } .console .card-h { flex-wrap: wrap; } button:disabled { opacity: .45; cursor: not-allowed; }
+
+/* Stations */
+.card.station { margin-bottom: 12px; }
+.card.station .card-h { flex-wrap: wrap; }
+.targets { display: grid; grid-template-columns: repeat(auto-fill, minmax(220px, 1fr)); gap: 2px 14px; }
+.row.wrap { flex-wrap: wrap; justify-content: flex-start; align-items: center; }
+.editor { border-top: 1px solid var(--line, #333); margin-top: 6px; padding-top: 6px; max-width: 460px; }
+.editor .row { align-items: center; justify-content: flex-start; }
+.editor input[type="number"] { width: 80px; }
+.editor .unit { width: 32px; text-align: left !important; }
+.grow { flex: 1; }
+tr.note-row td { border-top: none; padding-top: 0; }
+.members { display: grid; grid-template-columns: repeat(auto-fill, minmax(300px, 1fr)); gap: 8px; margin-top: 4px; }
+.member { border: 1px solid var(--line, #2a3340); border-radius: 6px; padding: 6px 8px; }
+.member .row.wrap { gap: 8px; }
+.station-mark { fill: none; stroke: var(--warn, #e0a030); stroke-width: 2; }
+.station-label { fill: var(--warn, #e0a030); font-size: 10px; font-weight: 700; }
+.flee { border: 1px solid var(--crit); border-radius: 6px; padding: 8px; margin: 8px 0; background: color-mix(in srgb, var(--crit) 10%, transparent); }
+.flee .members { margin-top: 6px; }

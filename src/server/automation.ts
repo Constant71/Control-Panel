@@ -33,7 +33,7 @@ const FAIL_BACKOFF_MS = 15 * 60_000;
 /** Spec (MannyMineRequest.targetAmount): one Manny trip carries 0.05 ECE. */
 const TRIP = 0.05;
 /** Fallback when the inventory doesn't list a Manny item to read its containerSpace from. */
-const FALLBACK_MANNY_SPACE = 0.05;
+export const FALLBACK_MANNY_SPACE = 0.05;
 
 interface State {
   settings: AutomationSettings;
@@ -101,6 +101,8 @@ export interface PlanInput {
   crafts?: TrackedCraft[];
   /** Probes about to explore elsewhere: no new outside work for their Mannies. */
   departing?: Set<number>;
+  /** Goals a station's production mode adds (after your own queue; an item you queued yourself wins). */
+  extraGoals?: Record<string, CraftGoal[]>;
 }
 
 /** Pure planner: what the automation would do right now. */
@@ -108,7 +110,7 @@ export function planAutomation(input: PlanInput): AutomationAction[] {
   return planAll(input).actions;
 }
 
-export function planAll({ snapshot, settings, inspected, busy, recipes = [], crafts = [], departing = new Set() }: PlanInput): { actions: AutomationAction[]; crafting: GoalStatus[] } {
+export function planAll({ snapshot, settings, inspected, busy, recipes = [], crafts = [], departing = new Set(), extraGoals = {} }: PlanInput): { actions: AutomationAction[]; crafting: GoalStatus[] } {
   const actions: AutomationAction[] = [];
   const crafting: GoalStatus[] = [];
   for (const v of snapshot.probes) {
@@ -153,7 +155,8 @@ export function planAll({ snapshot, settings, inspected, busy, recipes = [], cra
 
     // 2. Crafting queue (onboard work, so it also runs while the probe moves).
     const short: Record<Resource, number> = { deuterium: 0, metals: 0, ice: 0, carbon_compounds: 0 };
-    const goals = settings.craftQueue?.[String(p.id)] ?? [];
+    const own = settings.craftQueue?.[String(p.id)] ?? [];
+    const goals = [...own, ...(extraGoals[String(p.id)] ?? []).filter((g) => !own.some((o) => o.item === g.item))];
     if (goals.length && inv) {
       const on = settings.crafting !== false;
       // Paused: still show the plan, but hand out no Mannies.
@@ -229,10 +232,10 @@ export function planAll({ snapshot, settings, inspected, busy, recipes = [], cra
   return { actions, crafting };
 }
 
-function taskOf(m: Schemas["Manny"]): Record<string, unknown> {
+export function taskOf(m: Schemas["Manny"]): Record<string, unknown> {
   return Array.isArray(m.task) || !m.task ? {} : (m.task as Record<string, unknown>);
 }
-function pendingCargo(m: Schemas["Manny"]): number {
+export function pendingCargo(m: Schemas["Manny"]): number {
   const c = m.cargo;
   const carried = c.metals + c.ice + c.organicCompounds;
   if (m.currentTask !== "mining") return carried;
@@ -248,6 +251,15 @@ export class Automation extends EventEmitter {
   private readonly store: JsonStore<State>;
   lastPlan: AutomationAction[] = [];
   renames: PlannedRename[] = [];
+  /** Learned deuterium per sector of distance, by probe model. */
+  get costPerSector(): Record<string, number> {
+    return this.state.costPerSector;
+  }
+
+  /** Set by Stations each poll: probes exploration must leave alone, and probes whose Mannies station trips direct. */
+  stationHold: { noExplore: Set<number>; noMining: Set<number> } = { noExplore: new Set(), noMining: new Set() };
+  /** Set by Stations each poll: crafting goals from each station's production mode, by probe id. */
+  stationGoals: Record<string, CraftGoal[]> = {};
   crafting: GoalStatus[] = [];
   suggestions: Suggestion[] = [];
   improvements: Record<string, Schemas["ProbeImprovement"][]> = {};
@@ -375,7 +387,7 @@ export class Automation extends EventEmitter {
     this.explore = this.planExplore(this.lastSnapshot);
     const r = planAll({
       snapshot: this.lastSnapshot, settings: this.state.settings, inspected: new Set(this.state.inspected), busy,
-      recipes: this.state.recipes, crafts: this.state.crafts, departing: this.explore.departing,
+      recipes: this.state.recipes, crafts: this.state.crafts, departing: new Set([...this.explore.departing, ...this.stationHold.noMining]), extraGoals: this.stationGoals,
     });
     this.lastPlan = r.actions;
     this.crafting = r.crafting;
@@ -392,7 +404,7 @@ export class Automation extends EventEmitter {
       scans: Object.fromEntries(Object.entries(this.scans).map(([k, v]) => [k, v.sector])),
       settledSince: Object.fromEntries(Object.entries(this.state.settled).map(([k, v]) => [k, v.since])),
       costPerSector: this.state.costPerSector, inspected: new Set(this.state.inspected), now: this.now(),
-      approved: this.state.approvedMoves,
+      approved: this.state.approvedMoves, skip: this.stationHold.noExplore,
     });
     this.exploration = r.status;
     return r;
@@ -421,7 +433,7 @@ export class Automation extends EventEmitter {
     const t = this.now();
     let budget = SCANS_PER_CYCLE;
     const visited = new Set(snapshot.visitedSectors.map((s) => vkey(s.relativeCoordinates)));
-    for (const v of exploringProbes(snapshot, this.state.settings)) {
+    for (const v of exploringProbes(snapshot, this.state.settings, this.stationHold.noExplore)) {
       const pos = v.detail?.sector?.relative;
       if (!pos) continue;
       for (const n of fccNeighbors(pos)) {
@@ -472,7 +484,7 @@ export class Automation extends EventEmitter {
     if (typeof patch.naming === "boolean") s.naming = patch.naming;
     if (typeof patch.crafting === "boolean") s.crafting = patch.crafting;
     if (patch.defaults) s.defaults = sanitize({ ...s.defaults, ...patch.defaults, targets: { ...s.defaults.targets, ...(patch.defaults.targets ?? {}) } });
-    const ROLES = ["Probe", "Station", "Hauler", "Tanker", "Scout", "Miner"];
+    const ROLES = ["Probe", "Station", "Hauler", "Tanker", "StationTanker", "Scout", "Miner"];
     if (patch.probes)
       for (const [id, p] of Object.entries(patch.probes)) {
         if (p.role && !ROLES.includes(p.role)) delete p.role;
@@ -498,7 +510,7 @@ export class Automation extends EventEmitter {
     const busy = recentlyOrdered(t);
     const all = planAll({
       snapshot, settings: s, inspected: new Set(this.state.inspected), busy, recipes: this.state.recipes, crafts: this.state.crafts,
-      departing: this.explore.departing,
+      departing: new Set([...this.explore.departing, ...this.stationHold.noMining]), extraGoals: this.stationGoals,
     });
     this.lastPlan = all.actions;
     this.crafting = all.crafting;

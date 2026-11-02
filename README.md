@@ -202,6 +202,130 @@ then works like this:
   - Unread messages are checked every 5 minutes and shown as a nav badge.
 - **Alerts tab** on each probe: mark read, mark all read, delete alerts and damage warnings.
 
+## Step 5a: Stations (designation, groups, stock against targets)
+
+A station is a probe the panel keeps in place as a production hub, with its own group of probes. The game has no
+stations, so this is panel-only data (`data/stations.json`). It only changes which calls the panel makes.
+
+- **Make a probe a station** on the Stations page or on the probe page. Its role becomes Station (naming follows),
+  and exploration never moves it, even with Explore switched on.
+- **Group and roles.** Each group probe gets a role: Hauler, Tanker or Scout. A probe belongs to one station at most.
+  A role only changes while the probe is in reach. A probe that appears in a station's sector (for example one
+  just assembled there) joins that group with no role until you pick one.
+- **Make default probe** calls `PATCH /api/probe/{id}` with `isDefault: true`, behind a confirm dialog. The game refuses
+  (422) unless the station and the current default probe share a sector or an active SCUT network.
+- **Stock against targets:** resource floors (ECE), item floors (count), the station's fuel floor and its Manny count,
+  read from the station's inventory. Each station also has a Manny target per role.
+- **Checks** on each card: in reach, default probe, SCUT network, moving, fuel floor, group probes out of reach or
+  without a role.
+
+## Step 5b: Docked service (container hand-offs and refuelling)
+
+When a group probe and its station are in the same sector and neither is moving (the spec's rule for every
+probe-to-probe exchange), the station services it. Each step can be switched off per station and follows the
+automation mode (auto, dry run, off).
+
+- **Hauler container rules, at all times:** additional containers become hand-off containers (cargo first,
+  `strictExclusion: [manny]`), and the probe core becomes the Mannies' home (`priority: [manny]`), via
+  `PATCH .../storage-containers/{id}/rules`. A Manny never ends up in a container that is about to be handed over.
+- **Full containers to the station:** a Hauler's hand-off container that is at least 80% full is detached with
+  `mode: attach_to_probe` to the station. It is skipped if a Manny is inside, or if removing it would leave no
+  room for Mannies still outside. A `409 storage_container_reserved` triggers
+  `crafting-reservations/reassign`, then one retry.
+- **Empties back:** the station gives empty containers to the Hauler, up to 2 each (never more than 4, the movement
+  link risk), but only if the station keeps room for its own Mannies outside.
+- **Arrival:** the spec doesn't say whether an attached container lands in the receiver's storage or stays in the
+  sector. The panel watches both: if a new detached container appears in the sector, the receiver recovers it
+  (`recover-storage-container`). Hand-offs that never arrive are flagged on the station card after 2 hours.
+- **Refuelling:** `transfer-deuterium-to-probe` tops docked probes up to 90%, while the station stays above its fuel
+  floor. A docked Tanker tops the station up and keeps 30% for itself. Amounts stay strictly below the source's tank,
+  as the spec requires.
+- No Idempotency-Key is sent: the spec doesn't list one for these endpoints. A detach can't be doubled anyway,
+  because the container leaves the sender's inventory as soon as the order is accepted.
+
+## Step 5c: Dispatch and hauler trips
+
+Each poll, the panel compares every station's raw resource targets (metals, ice, carbon compounds) with its stock.
+When one is short, an idle docked Hauler goes to fetch it. Each card on the Stations page explains why a trip is
+or isn't going out.
+
+- **Where:** the nearest sector that the visited-sector scans (`GET /api/sector`) show holding that resource. It must
+  be covered by a SCUT network the default probe is on, so the Hauler stays in command range the whole time. Sectors
+  with a black hole or missile are skipped. Moves inside range run on their own, as agreed.
+- **Checks before leaving:** at least 40% integrity; hand-off containers at least half empty; no hand-off or refuel
+  in progress; every Manny aboard and idle. Fuel must cover the round trip (from the move cost learned on earlier
+  moves) and still leave 20% of the tank. While the cost isn't known yet, the trip waits for 80% fuel.
+- **At the mining sector:** the trip sends idle Mannies to mine that resource (`POST .../mine`). It keeps one Manny
+  idle, and only sends what fits in the hand-off containers, keeping room for every Manny to come home. The regular
+  mining automation leaves the Hauler alone during the trip.
+- **Heading home:** once the hand-off containers reach the hand-over threshold, nothing there holds the resource any
+  more, or it has spent 6 hours there. It waits until every Manny is aboard, then flies home. Docked service hands the
+  containers over, and the trip ends.
+- **Problems:** a move that never starts, a failed movement, or 30 minutes out of command range mark the trip
+  failed. The station card shows this.
+- Exploration and the regular mining leave stations and their groups alone. The map marks stations with an
+  outlined S.
+- Each station can switch trips off. The longest stay and the fuel margin are editable.
+
+## Step 5d: Production modes
+
+Each station's production mode becomes ordinary crafting goals ("keep at least N aboard"). The step 3b crafting
+planner works through them with `craft` and `atomic-printer/craft`, ingredients first. If your own crafting queue
+already has an item, your goal is used instead of the station's.
+
+- **Parts** (default): the station's item stock targets.
+- **Manny factory:** the `manny` recipe, enough for the station's Manny target plus whatever its group probes are short of.
+- **Probe yard:** the assembly kit for a generic probe or a deuterium tanker (pick one). The station also keeps 2 empty
+  containers instead of giving them to Haulers. The build itself stays a confirm card on the Builds page.
+- **Manny split (always on):** while a group probe is docked, idle Mannies move between it and the station
+  (`transfer-to-probe`) to meet each role's Manny target. They only move if the receiver has room, and only one move
+  runs per pair at a time.
+- The spec's `MannyCraftRequest` only takes `recipe`, so the panel doesn't rely on one Manny crafting a whole chain
+  ("whole build"). It crafts parts first instead.
+
+## Step 5e: Flee cards and stuck fixes
+
+A station never moves on its own. When it is in danger, its card on the Stations page shows a red flee card.
+
+- **Triggers (spec only):** an unresolved alert with phase `weapon_targeted` from the last 24 hours, a missile in the
+  sector with `targetsCurrentProbe`, integrity below the station's flee floor (default 50%, editable), or unresolved
+  damage warnings.
+- **Options:** up to 4 neighbouring sectors. Sectors with a known hazard are left out. Sectors on the station's SCUT
+  network, and sectors visited before, come first.
+- **Risks shown before you confirm:** 5 or more additional containers (break-off chance), Mannies working in another
+  sector (a remote recall would strand them, so they are left), Mannies outside in this sector (recalled first),
+  being the default probe, and fuel for the jump.
+- **After you confirm:** local Mannies are recalled (`POST .../mannies/{id}/recall`), then `POST /api/probe/{id}/move`
+  goes out once all of them are aboard. While fleeing, the station starts no new trips, hand-offs or refuels.
+  Haulers already out come home to the new sector. You can cancel until the move is sent; an unstarted flee expires
+  after 6 hours.
+- **Stranded Hauler:** if a Hauler on a trip lacks the fuel to fly home, a free docked Tanker of the same station flies
+  out and sends fuel with `transfer-deuterium-to-probe`, keeping its own reserve. It only goes when the move cost is
+  known.
+- **Stragglers:** an idle Hauler or Tanker left away from the station flies home once its Mannies are aboard and it has
+  the fuel.
+
+## Station Tanker role
+
+A group role for a tanker whose only job is deuterium for its station (Merchant, 2026-11-02). The regular mining
+automation leaves it alone, and the station never fuels it.
+
+- **Deuterium in the station's sector:** it never leaves. Its Mannies mine deuterium (`mine` with
+  `resources: [deuterium]`) until its tank is full, and it gives the station everything it has with
+  `transfer-deuterium-to-probe` (1 point stays, because the amount must be below its own deuterium).
+- **No deuterium in the station's sector:** it gives the station everything above a reserve: 20% of its tank
+  (editable), or the round trip to the nearest deuterium if that costs more. Once it has nothing left to give and the
+  station isn't full, it flies to the nearest known deuterium sector on the SCUT network (hazards skipped), mines until
+  its tank is full, waits for every Manny, flies home and starts giving again.
+- If it ends up away from the station without a trip, it flies home once its Mannies are aboard.
+
+## Debug export
+
+The System page has **Download debug export**: one JSON file (`GET /panel-api/diagnostics`) with the latest poll,
+recent API calls and errors, problems and fixes, automation, stations, discoveries and the console log. The API key,
+the panel password and anything shaped like a key or token are removed before it is sent. Send it when something
+looks wrong on the live game.
+
 ## Develop
 
 ```bash
@@ -219,5 +343,6 @@ The mock (`mock/`) is typed against the generated schema too, so it can't drift 
 1. Foundation and read-only live view
 2. Problems page with automatic fixes, fix log, discoveries
 3. 24/7 automation: 3a mining, construct inspection, naming; 3b crafting and probe-build suggestions; 3c exploration. Rules (mining, crafting, repair, deuterium, storage, exploration within SCUT range, inspecting dormant constructs, probe-build suggestions, automatic naming)
-4. Remaining endpoints as manual controls, plus messaging, logbook and forum (this)
-5. Stations (from the Stations design)
+4. Remaining endpoints as manual controls, plus messaging, logbook and forum
+5. Stations (from the Stations design): 5a designation, groups and stock targets; 5b container hand-offs and
+   refuelling while docked; 5c dispatch loop and hauler trips; 5d production modes; 5e flee cards and stuck fixes (this)
