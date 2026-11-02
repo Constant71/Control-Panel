@@ -5,9 +5,9 @@
  */
 
 export type StationMode = "parts" | "manny_factory" | "probe_yard";
-export type MemberRole = "Hauler" | "Tanker" | "StationTanker" | "Scout";
-export const MEMBER_ROLES: MemberRole[] = ["Hauler", "Tanker", "StationTanker", "Scout"];
-export const ROLE_LABEL: Record<MemberRole, string> = { Hauler: "Hauler", Tanker: "Tanker", StationTanker: "Station Tanker", Scout: "Scout" };
+export type MemberRole = "Hauler" | "Miner" | "Tanker" | "StationTanker" | "Scout";
+export const MEMBER_ROLES: MemberRole[] = ["Hauler", "Miner", "Tanker", "StationTanker", "Scout"];
+export const ROLE_LABEL: Record<MemberRole, string> = { Hauler: "Hauler", Miner: "Miner", Tanker: "Tanker", StationTanker: "Station Tanker", Scout: "Scout" };
 export type StockResource = "metals" | "ice" | "carbon_compounds" | "deuterium";
 
 export type StockTarget =
@@ -230,7 +230,7 @@ export const DEFAULT_STATION: Omit<StationConfig, "probeId" | "createdAt"> = {
   ],
   fuelFloorPercent: 60,
   mannyTarget: 12,
-  mannyPerRole: { Hauler: 6, Tanker: 2, StationTanker: 4, Scout: 2 },
+  mannyPerRole: { Hauler: 6, Miner: 6, Tanker: 2, StationTanker: 4, Scout: 2 },
   service: true,
   handoffMinFillPercent: 80,
   containersPerHauler: 2,
