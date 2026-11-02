@@ -9,6 +9,7 @@
 import { KITS } from "./builds.js";
 import type { Snapshot } from "./poller.js";
 import type { CraftGoal } from "../shared/crafting.js";
+import { isFullProbe } from "../shared/attention.js";
 import type { ProductionGoal, StationConfig, StationsData } from "../shared/stations.js";
 
 const MAX_MANNY_GOAL = 200;
@@ -45,4 +46,70 @@ export function productionGoals(cfg: StationConfig, data: Pick<StationsData, "me
 
 export function toCraftGoals(stationId: number, goals: ProductionGoal[]): CraftGoal[] {
   return goals.map((g) => ({ id: `station:${stationId}:${g.item}`, item: g.item, quantity: g.quantity, once: false, note: g.why, addedAt: "" }));
+}
+
+/** A helper needs room for raw resources and parts while it builds (one Manny is about 1 ECE of steel parts alone). */
+export const HELPER_MIN_STORAGE = 2;
+
+/** How many Mannies the station wants aboard: its Manny factory goal, or a Manny line in its own crafting queue. */
+export function stationMannyWant(cfg: StationConfig, data: Pick<StationsData, "members">, snapshot: Snapshot, queued: CraftGoal[]): number {
+  const fromMode = productionGoals(cfg, data, snapshot).find((g) => g.item === "manny")?.quantity ?? 0;
+  const fromQueue = Math.max(0, ...queued.filter((g) => g.item === "manny").map((g) => g.quantity));
+  return Math.max(fromMode, fromQueue);
+}
+
+export interface HelperPlan {
+  /** Station id → how many Mannies it wants aboard. */
+  want: Record<number, number>;
+  /** Group probes building Mannies now, with the station they build for. */
+  builders: Map<number, number>;
+  /** Group probe id → why it is or isn't helping (shown on its card). */
+  notes: Record<number, string>;
+}
+
+/**
+ * Which group probes build Mannies for their station. Any role but Scout can help, as long as it
+ * has an atomic printer (GET /api/probe/{id} inventory item atomic_3d_printer) and enough storage.
+ */
+export function planHelpers(stations: StationConfig[], data: Pick<StationsData, "members">, snapshot: Snapshot, queued: (probeId: number) => CraftGoal[]): HelperPlan {
+  const out: HelperPlan = { want: {}, builders: new Map(), notes: {} };
+  const views = new Map(snapshot.probes.map((v) => [v.summary.id, v]));
+  for (const cfg of stations) {
+    const sv = views.get(cfg.probeId);
+    const want = stationMannyWant(cfg, data, snapshot, queued(cfg.probeId));
+    out.want[cfg.probeId] = want;
+    const have = sv?.mannies?.length;
+    if (!cfg.helperBuilds || have === undefined || have >= want) continue;
+    const stationName = sv!.summary.name;
+    for (const [id, m] of Object.entries(data.members)) {
+      if (m.stationId !== cfg.probeId || !m.role) continue;
+      const v = views.get(Number(id));
+      if (!v || !v.summary.isReachable || !isFullProbe(v.detail) || !v.mannies) continue;
+      const inv = v.detail.inventory;
+      if (m.role === "Scout") continue;
+      if (!inv?.items.some((i) => i.type === "atomic_3d_printer")) {
+        out.notes[Number(id)] = "Not building Mannies: no atomic printer aboard.";
+        continue;
+      }
+      if ((inv.capacity ?? 0) < HELPER_MIN_STORAGE) {
+        out.notes[Number(id)] = `Not building Mannies: ${inv.capacity} ECE of storage; a helper needs at least ${HELPER_MIN_STORAGE}.`;
+        continue;
+      }
+      out.builders.set(Number(id), cfg.probeId);
+      out.notes[Number(id)] = `Building Mannies for ${stationName} (${have} of ${want} there); each finished one moves to the station.`;
+    }
+  }
+  return out;
+}
+
+/** One Manny at a time on each helper: always one more than it has now, so its printer never sits idle. */
+export function helperGoals(plan: HelperPlan, snapshot: Snapshot): Record<string, CraftGoal[]> {
+  const out: Record<string, CraftGoal[]> = {};
+  for (const [id, stationId] of plan.builders) {
+    const v = snapshot.probes.find((x) => x.summary.id === id);
+    const have = v?.mannies?.length ?? 0;
+    const station = snapshot.probes.find((x) => x.summary.id === stationId)?.summary.name ?? `probe ${stationId}`;
+    out[String(id)] = [{ id: `helper:${stationId}:manny`, item: "manny", quantity: have + 1, once: false, note: `Mannies for ${station}`, addedAt: "" }];
+  }
+  return out;
 }

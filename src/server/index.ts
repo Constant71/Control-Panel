@@ -62,6 +62,7 @@ const stations = new Stations(game, config.dataDir, {
   goals: (byProbe) => {
     automation.stationGoals = byProbe;
   },
+  queued: (probeId) => automation.settings.craftQueue[String(probeId)] ?? [],
 });
 
 // After every refresh: fix first (urgent), then automation, then scan for discoveries.

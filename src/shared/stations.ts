@@ -48,6 +48,14 @@ export interface StationConfig {
   tripFuelMarginPercent: number;
   /** Station Tanker with no deuterium at home: percent of its tank kept for the next collecting trip. */
   stationTankerReservePercent: number;
+  /**
+   * While the station wants more Mannies, group probes with an atomic printer build Mannies too
+   * (each probe's printer runs one craft at a time, so more printers means more Mannies) and every
+   * finished Manny moves to the station.
+   */
+  helperBuilds: boolean;
+  /** Station Mannies lent to each docked helper to mine and craft for it. */
+  helperLend: number;
   createdAt: string;
 }
 
@@ -242,6 +250,8 @@ export const DEFAULT_STATION: Omit<StationConfig, "probeId" | "createdAt"> = {
   maxTripHours: 6,
   tripFuelMarginPercent: 20,
   stationTankerReservePercent: 20,
+  helperBuilds: true,
+  helperLend: 6,
 };
 
 export const MODE_LABEL: Record<StationMode, string> = {

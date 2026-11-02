@@ -221,6 +221,21 @@ function StationCard({ s, free, recipes, run, goals }: {
       <AddMember stationId={s.probeId} free={free} run={run} />
 
       <div className="card-h mt">
+        <div className="tiny"><b>Helpers build Mannies</b> <span className="muted">group probes with an atomic printer build Mannies while the station wants more</span></div>
+        <span className="spacer" />
+        <div className="mode">
+          <button className={s.config.helperBuilds ? "on" : ""} onClick={() => update({ helperBuilds: true })}>on</button>
+          <button className={!s.config.helperBuilds ? "on" : ""} onClick={() => update({ helperBuilds: false })}>off</button>
+        </div>
+      </div>
+      <p className="muted tiny">
+        Each probe's atomic printer runs one craft at a time, and a Manny needs hours of printing, so more printers build Mannies faster.
+        While the station has fewer Mannies than its Manny factory goal or a Manny line in its crafting queue, every group probe
+        (not Scouts) with a printer and at least 2 ECE of storage builds one Manny at a time. Docked helpers borrow up to {s.config.helperLend} station
+        Mannies to mine and craft, and each finished Manny moves to the station.
+      </p>
+
+      <div className="card-h mt">
         <div className="tiny"><b>Trips</b> <span className="muted">Haulers fetch what the station is short of, inside the SCUT network</span></div>
         <span className="spacer" />
         <div className="mode">
@@ -350,6 +365,7 @@ function TargetEditor({ cfg, recipes, onSave }: { cfg: StationConfig; recipes: s
   const [tripMargin, setTripMargin] = useState(cfg.tripFuelMarginPercent);
   const [stReserve, setStReserve] = useState(cfg.stationTankerReservePercent);
   const [fleeAt, setFleeAt] = useState(cfg.fleeIntegrityPercent);
+  const [lend, setLend] = useState(cfg.helperLend);
   const [newKind, setNewKind] = useState<"resource" | "item">("resource");
   const [newName, setNewName] = useState("");
   const set = (i: number, min: number) => setTargets(targets.map((t, j) => (j === i ? { ...t, min } : t)));
@@ -384,6 +400,7 @@ function TargetEditor({ cfg, recipes, onSave }: { cfg: StationConfig; recipes: s
         <div key={r} className="row"><span className="grow">Mannies per {ROLE_LABEL[r]}</span>
           <input type="number" min={0} value={perRole[r]} onChange={(e) => setPerRole({ ...perRole, [r]: Number(e.target.value) })} /><span className="unit" /></div>
       ))}
+      <div className="row"><span className="grow">Station Mannies lent to each build helper</span><input type="number" min={0} max={50} value={lend} onChange={(e) => setLend(Number(e.target.value))} /><span className="unit" /></div>
       <div className="row"><span className="grow">Longest stay at a mining sector</span><input type="number" min={1} max={72} value={tripHours} onChange={(e) => setTripHours(Number(e.target.value))} /><span className="unit">h</span></div>
       <div className="row"><span className="grow">Fuel left after a round trip</span><input type="number" min={0} max={90} value={tripMargin} onChange={(e) => setTripMargin(Number(e.target.value))} /><span className="unit">%</span></div>
       <div className="row"><span className="grow">Hand over containers at least this full</span><input type="number" min={1} max={100} value={fill} onChange={(e) => setFill(Number(e.target.value))} /><span className="unit">%</span></div>
@@ -395,6 +412,7 @@ function TargetEditor({ cfg, recipes, onSave }: { cfg: StationConfig; recipes: s
         targets, fuelFloorPercent: fuel, mannyTarget: mannies, mannyPerRole: perRole,
         handoffMinFillPercent: fill, containersPerHauler: boxes, ferryFuelTargetPercent: ferryFuel, tankerReservePercent: reserve,
         maxTripHours: tripHours, tripFuelMarginPercent: tripMargin, fleeIntegrityPercent: fleeAt, stationTankerReservePercent: stReserve,
+        helperLend: lend,
       })}>Save settings</button>
     </div>
   );
