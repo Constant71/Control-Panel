@@ -4,6 +4,8 @@ A self-hosted control panel for [neumann-probe.net](https://neumann-probe.net/).
 It runs 24/7 in Docker, watches your whole fleet through the game's official
 API, and serves a dashboard that works on PC and phone.
 
+**New here?** The [user guide](docs/GUIDE.md) explains what every page and button does.
+
 **Rule for this project:** the panel only uses what the game API actually offers.
 The contract is [`spec/openapi.yaml`](spec/openapi.yaml) (API version 150).
 TypeScript types are generated from it (`npm run gen:api`), so calling an
