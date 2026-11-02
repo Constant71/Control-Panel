@@ -62,6 +62,8 @@ export interface StationConfig {
    * (mine targetContainerId), which drops the travel legs. Full: recover it, empty it, repeat.
    */
   depot: boolean;
+  /** How many containers to keep hidden as depots at once (miners spread over them). */
+  depotContainers: number;
   createdAt: string;
 }
 
@@ -234,8 +236,8 @@ export interface StationStatus {
   production: ProductionGoal[];
   /** Danger: a flee card waiting for Merchant, or a confirmed flee under way (5e). */
   flee: FleeCard | null;
-  /** The asteroid depot, if one is out. */
-  depot: Depot | null;
+  /** The asteroid depots out now. */
+  depots: Depot[];
   /** Why there is no depot right now, or what it is waiting for. */
   depotNote: string | null;
 }
@@ -288,6 +290,7 @@ export const DEFAULT_STATION: Omit<StationConfig, "probeId" | "createdAt"> = {
   helperBuilds: true,
   helperLend: 6,
   depot: true,
+  depotContainers: 4,
 };
 
 export const MODE_LABEL: Record<StationMode, string> = {

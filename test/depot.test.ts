@@ -48,15 +48,15 @@ test("the depot cycle: hide an empty container on the richest asteroid, wait whi
   try {
     const now = Date.now();
     let snap = home(poller.snapshot);
-    let plan = planDepots({ snapshot: snap, stations: [station()], depots: {}, handoffs: [], busy: new Set(), now });
+    let plan = planDepots({ snapshot: snap, stations: [station()], depots: [], handoffs: [], busy: new Set(), now });
     const hide = plan.ops[0];
     assert.ok(hide && hide.plan.kind === "depot_hide");
     assert.equal(hide.plan.kind === "depot_hide" && hide.plan.containerId, "container-itm_x");
     assert.equal(hide.plan.kind === "depot_hide" && hide.plan.asteroidId, "asteroid-metal-1", "3 ECE of metals beats 2 of ice");
     assert.equal(hiddenIdFor("container-itm_x"), "detached-container-container-itm_x", "the spec's example id");
 
-    assert.equal(planDepots({ snapshot: snap, stations: [station({ depot: false })], depots: {}, handoffs: [], busy: new Set(), now }).ops.length, 0, "off");
-    assert.equal(planDepots({ snapshot: snap, stations: [station()], depots: {}, handoffs: [], busy: new Set(), now, reserved: new Set(["container-itm_x"]) }).ops.length, 0,
+    assert.equal(planDepots({ snapshot: snap, stations: [station({ depot: false })], depots: [], handoffs: [], busy: new Set(), now }).ops.length, 0, "off");
+    assert.equal(planDepots({ snapshot: snap, stations: [station()], depots: [], handoffs: [], busy: new Set(), now, reserved: new Set(["container-itm_x"]) }).ops.length, 0,
       "a container a hand-off is using is left alone");
 
     const base: Depot = {
@@ -65,33 +65,36 @@ test("the depot cycle: hide an empty container on the richest asteroid, wait whi
     };
     // Detached: the container left the inventory and nobody is detaching any more.
     (snap.probes[0].detail as Probe).inventory!.containers.pop();
-    plan = planDepots({ snapshot: snap, stations: [station()], depots: { "1": base }, handoffs: [], busy: new Set(), now });
+    (snap.probes[0].detail as Probe).inventory!.containers.push(box("container-itm_y", "Extra 2", "container", 0.5, 0));
+    plan = planDepots({ snapshot: snap, stations: [station()], depots: [base], handoffs: [], busy: new Set(), now });
     assert.equal(plan.changes[0].depot?.state, "active");
+    const second = plan.ops[0];
+    assert.ok(second?.plan.kind === "depot_hide" && second.plan.containerId === "container-itm_y", "and a second container goes out (4 at once by default)");
 
     const active = { ...base, state: "active" as const, contents: 0.2 };
     const miner = { ...snap.probes[0].mannies![0], id: "mx", currentTask: "mining", task: { targetAmount: 0.1, depositedAmount: 0.02, targetContainer: { id: base.objectId } } };
     snap.probes[0].mannies!.push(miner as never);
     assert.ok(Math.abs(depotFree(active, snap) - 0.22) < 1e-9, "0.5 - 0.2 inside - 0.08 on its way");
-    plan = planDepots({ snapshot: snap, stations: [station()], depots: { "1": active }, handoffs: [], busy: new Set(), now });
-    assert.equal(plan.ops.length, 0);
+    plan = planDepots({ snapshot: snap, stations: [station()], depots: [active], handoffs: [], busy: new Set(), now });
+    assert.ok(!plan.ops.some((o) => o.plan.kind === "depot_recover"));
     assert.match(plan.notes[1], /Mining into the depot/);
 
     const full = { ...active, contents: 0.49 };
-    plan = planDepots({ snapshot: snap, stations: [station()], depots: { "1": full }, handoffs: [], busy: new Set(), now });
-    assert.equal(plan.ops.length, 0, "never recovered while a Manny mines into it (recovery would drop its cargo)");
+    plan = planDepots({ snapshot: snap, stations: [station()], depots: [full], handoffs: [], busy: new Set(), now });
+    assert.ok(!plan.ops.some((o) => o.plan.kind === "depot_recover"), "never recovered while a Manny mines into it (recovery would drop its cargo)");
     snap.probes[0].mannies!.pop();
-    plan = planDepots({ snapshot: snap, stations: [station()], depots: { "1": full }, handoffs: [], busy: new Set(), now });
-    assert.equal(plan.ops[0]?.plan.kind, "depot_recover");
+    plan = planDepots({ snapshot: snap, stations: [station()], depots: [full], handoffs: [], busy: new Set(), now });
+    assert.ok(plan.ops.some((o) => o.plan.kind === "depot_recover"));
 
     // Back aboard holding 0.49 ECE of metals: moved into the core.
     snap = home(poller.snapshot);
     const P = snap.probes[0].detail as Probe;
     const metals = P.inventory!.resourceStocks.find((r) => r.type === "metals")!;
     metals.containers = [...(metals.containers ?? []), { container: { id: "container-itm_x", kind: "container", label: "Extra", sortOrder: 1 }, amount: 0.49, containerSpace: 0.49, capacityUnit: "earth_container_equivalent" }];
-    plan = planDepots({ snapshot: snap, stations: [station()], depots: { "1": { ...full, state: "recovering" } }, handoffs: [], busy: new Set(), now });
+    plan = planDepots({ snapshot: snap, stations: [station()], depots: [{ ...full, state: "recovering" }], handoffs: [], busy: new Set(), now });
     assert.equal(plan.changes[0].depot?.state, "emptying");
-    plan = planDepots({ snapshot: snap, stations: [station()], depots: { "1": { ...full, state: "emptying" } }, handoffs: [], busy: new Set(), now });
-    const move = plan.ops[0];
+    plan = planDepots({ snapshot: snap, stations: [station()], depots: [{ ...full, state: "emptying" }], handoffs: [], busy: new Set(), now });
+    const move = plan.ops.find((o) => o.plan.kind === "depot_empty");
     assert.ok(move && move.plan.kind === "depot_empty" && move.plan.toContainerId === "probe-core" && move.plan.amount === 0.49);
   } finally {
     await mock.close();
@@ -111,9 +114,12 @@ test("mining goes into the depot for metals, ice and carbon, never deuterium, an
     };
     const mines = (depots = {}) => planAll({ snapshot: snap, settings, inspected: new Set(), busy: new Set(), depots }).actions.filter((a) => a.plan.kind === "mine");
     assert.ok(!mines().some((a) => a.plan.kind === "mine" && a.plan.resources[0] !== "deuterium"), "no room aboard: no cargo mining");
-    const withDepot = mines({ "1": { objectId: "detached-container-container-itm_x", asteroidId: "asteroid-metal-1", free: 0.4 } });
+    const withDepot = mines({ "1": [
+      { objectId: "detached-container-container-itm_x", asteroidId: "asteroid-metal-1", free: 0.05 },
+      { objectId: "detached-container-container-itm_y", asteroidId: "asteroid-metal-1", free: 0.4 },
+    ] });
     const metal = withDepot.find((a) => a.plan.kind === "mine" && a.plan.resources[0] === "metals");
-    assert.ok(metal && metal.plan.kind === "mine" && metal.plan.targetContainerId === "detached-container-container-itm_x" && metal.plan.objectId === "asteroid-metal-1");
+    assert.ok(metal && metal.plan.kind === "mine" && metal.plan.targetContainerId === "detached-container-container-itm_y" && metal.plan.objectId === "asteroid-metal-1");
     assert.ok(withDepot.every((a) => a.plan.kind !== "mine" || a.plan.resources[0] !== "deuterium" || !a.plan.targetContainerId), "deuterium never goes into the depot");
   } finally {
     await mock.close();

@@ -92,7 +92,7 @@ function asteroids(sector: Schemas["SectorObservation"] | null): Obj[] {
 export interface DepotInput {
   snapshot: Snapshot;
   stations: StationConfig[];
-  depots: Record<string, Depot>;
+  depots: Depot[];
   handoffs: Handoff[];
   busy: Set<string>;
   now: number;
@@ -102,8 +102,8 @@ export interface DepotInput {
 
 export interface DepotPlan {
   ops: StationOp[];
-  /** State changes to apply (null removes the depot). */
-  changes: Array<{ stationId: number; depot: Depot | null; log: string }>;
+  /** State changes to apply, by container (null removes the depot). */
+  changes: Array<{ stationId: number; containerId: string; depot: Depot | null; log: string }>;
   notes: Record<number, string>;
 }
 
@@ -113,14 +113,13 @@ export function planDepots({ snapshot, stations, depots, handoffs, busy, now, re
   const iso = new Date(now).toISOString();
 
   for (const cfg of stations) {
-    const d = depots[String(cfg.probeId)] ?? null;
-    if (!cfg.depot && !d) continue;
+    const ds = depots.filter((x) => x.stationId === cfg.probeId);
+    if (!cfg.depot && !ds.length) continue;
     const sv = snapshot.probes.find((v) => v.summary.id === cfg.probeId);
     if (!sv || !sv.summary.isReachable || !isFullProbe(sv.detail) || !sv.mannies) continue;
     const S = sv.detail as Probe;
     const name = sv.summary.name;
-    const note = (text: string) => (out.notes[cfg.probeId] = text);
-    const change = (depot: Depot | null, log: string) => out.changes.push({ stationId: cfg.probeId, depot, log });
+    const notes: string[] = [];
     const idle = sv.mannies.filter((m) => m.location.type === "probe" && m.currentTask === null && m.canReceiveOrders && !busy.has(m.id));
     const take = () => {
       if (idle.length <= KEEP_IDLE) return null;
@@ -132,109 +131,125 @@ export function planDepots({ snapshot, stations, depots, handoffs, busy, now, re
     const onboard = (id: string) => S.inventory?.containers.find((c) => c.id === id) ?? null;
     if (["dead", "disabled", "trapped_by_black_hole"].includes(S.status)) continue;
 
-    if (!d) {
-      if (isMoving(S)) { note("The station is moving."); continue; }
-      const rock = asteroids(sv.sector)[0];
-      if (!rock) { note("No asteroid with metals, ice or carbon in this sector."); continue; }
-      const room = spareRoom(S, sv.mannies);
-      const box = (S.inventory?.containers ?? [])
-        .filter((c) => c.kind === "container" && !isHandoffContainer(c) && !inFlight.has(c.id) && !reserved.has(c.id) && !holdsAnything(S, c) && (c.capacity ?? 0) >= DEPOT_MIN_CAPACITY)
-        .filter((c) => room - (c.capacity ?? 0) >= 0) // the Mannies outside still need room to dock
-        .sort((a, b) => (b.capacity ?? 0) - (a.capacity ?? 0))[0];
-      if (!box) { note("Waiting for an empty extra container on the station (with room left for the Mannies outside)."); continue; }
-      const m = take();
-      if (!m) { note("Waiting for an idle Manny to hide the depot."); continue; }
-      const rockName = (rock.name as string | undefined) ?? rock.id!;
-      out.ops.push({
-        id: `depot_hide:${cfg.probeId}`, stationId: cfg.probeId,
-        label: `${m.name} hides "${box.label}" on ${rockName} as a mining depot`,
-        why: "Mining into a container hidden on the mined asteroid drops both travel legs (spec: MannyMineRequest.targetContainerId), so each load takes about half the time.",
-        endpoint: `POST /api/probe/${cfg.probeId}/mannies/${m.id}/detach-storage-container`,
-        plan: { kind: "depot_hide", probeId: cfg.probeId, mannyId: m.id, containerId: box.id, asteroidId: rock.id!, asteroidName: rockName, capacity: box.capacity ?? 0 },
-      });
-      continue;
+    for (const d0 of ds) {
+      let d = d0;
+      const note = (text: string) => notes.push(text);
+      const change = (depot: Depot | null, log: string) => out.changes.push({ stationId: cfg.probeId, containerId: d0.containerId, depot, log });
+      switch (d.state) {
+        case "hiding": {
+          const detaching = sv.mannies.find((m) => m.currentTask === "detaching_storage_container");
+          const seen = detaching ? (taskOf(detaching).artificialObjectDetected as { objectId?: string } | undefined)?.objectId : undefined;
+          if (seen && seen !== d.objectId) d = { ...d, objectId: seen };
+          if (detaching || !settled(d)) {
+            if (d !== d0) change(d, `Depot id is ${d.objectId}`);
+            note(`Hiding "${d.containerId}" on ${d.asteroidName}.`);
+            break;
+          }
+          if (onboard(d.containerId)) {
+            change(null, `Depot on ${d.asteroidName} was not hidden; the container is still aboard ${name}.`);
+            break;
+          }
+          change({ ...d, state: "active", updatedAt: iso, note: null }, `Depot hidden on ${d.asteroidName}; Mannies now mine into it.`);
+          break;
+        }
+        case "active": {
+          if (d.lost) { note(`The depot ${d.objectId} on ${d.asteroidName} can't be found (GET sector-objects inventory: 404). Nothing new is mined into it; check that asteroid in the game.`); break; }
+          const miners = depotMiners(snapshot, d.objectId);
+          const rockThere = !sv.sector || allAsteroids(sv.sector).some((o) => o.id === d.asteroidId);
+          const full = d.contents !== null && d.capacity - d.contents < DEPOT_FULL_FREE;
+          const leaving = isMoving(S) || !rockThere;
+          if (!full && !leaving && cfg.depot) {
+            note(`Mining into the depot on ${d.asteroidName}: ${d.contents === null ? "?" : round(d.contents)} of ${round(d.capacity)} ECE, ${miners.length} Manny${miners.length === 1 ? "" : "s"} on it.`);
+            break;
+          }
+          if (miners.length) { note(`Depot ${full ? "is full" : "is being closed"}; waiting for ${miners.length} Manny${miners.length === 1 ? "" : "s"} to finish mining into it.`); break; }
+          if (isMoving(S)) { note("The station is moving; the depot stays hidden on the asteroid until it is back."); break; }
+          const m = take();
+          if (!m) { note("Depot is ready to bring home; waiting for an idle Manny."); break; }
+          out.ops.push({
+            id: `depot_recover:${d.objectId}`, stationId: cfg.probeId,
+            label: `${m.name} brings the depot on ${d.asteroidName} home`,
+            why: full ? `It holds ${round(d.contents!)} of ${round(d.capacity)} ECE.` : !rockThere ? "Its asteroid is no longer in the sector scan." : "The depot was switched off.",
+            endpoint: `POST /api/probe/${cfg.probeId}/mannies/${m.id}/recover-storage-container`,
+            plan: { kind: "depot_recover", probeId: cfg.probeId, mannyId: m.id, objectId: d.objectId },
+          });
+          break;
+        }
+        case "recovering": {
+          if (onboard(d.containerId)) {
+            change({ ...d, state: "emptying", updatedAt: iso }, `Depot container is back aboard ${name}; emptying it into the station's storage.`);
+            break;
+          }
+          if (now - new Date(d.updatedAt).getTime() > RECOVER_TIMEOUT_MS) {
+            change({ ...d, state: "active", updatedAt: iso, note: "The recovery didn't land; trying again." }, "Depot recovery didn't land within an hour; trying again.");
+            break;
+          }
+          note(`Bringing the depot home from ${d.asteroidName}.`);
+          break;
+        }
+        case "emptying": {
+          const box = onboard(d.containerId);
+          if (!box) { change(null, "Depot container is no longer aboard; starting over."); break; }
+          if (sv.mannies.some((m) => m.currentTask === "moving_stockage")) { note("Moving the depot's resources into the station's storage."); break; }
+          const lines = (S.inventory?.resourceStocks ?? []).flatMap((s) =>
+            (s.containers ?? []).filter((c) => c.container.id === d.containerId && c.amount > 0.0005).map((c) => ({ type: s.type as DepotResource, amount: c.amount })));
+          if (!lines.length || !cfg.depot) {
+            change(null, lines.length ? "Depot switched off; its container stays aboard as normal storage." : "Depot emptied; it will be hidden again.");
+            break;
+          }
+          const dest = (S.inventory?.containers ?? [])
+            .filter((c) => c.id !== d.containerId && !inFlight.has(c.id) && (c.kind === "probe" || !isHandoffContainer(c)) && (c.freeCapacity ?? 0) > 0.005)
+            // Top up containers already in use first, keeping empty ones free for the next depot.
+            .sort((a, b) => Number(holdsAnything(S, b)) - Number(holdsAnything(S, a)) || (b.freeCapacity ?? 0) - (a.freeCapacity ?? 0))[0];
+          if (!dest) {
+            change(null, "No room elsewhere aboard to empty the depot container; it stays aboard as normal storage and crafting will use it.");
+            break;
+          }
+          const m = take();
+          if (!m) { note("Waiting for an idle Manny to empty the depot container."); break; }
+          const line = lines[0];
+          const amount = Math.floor(Math.min(line.amount, (dest.freeCapacity ?? 0)) * 1000) / 1000;
+          if (amount < 0.001) { change(null, "Depot container is almost empty; it stays aboard as normal storage."); break; }
+          out.ops.push({
+            id: `depot_empty:${d.containerId}`, stationId: cfg.probeId,
+            label: `${m.name} moves ${amount} ECE ${line.type.replace("_", " ")} from the depot container to "${dest.label}"`,
+            why: "The depot container is emptied so it can go back out to the asteroid.",
+            endpoint: `POST /api/probe/${cfg.probeId}/storage-moves`,
+            plan: { kind: "depot_empty", probeId: cfg.probeId, mannyId: m.id, fromContainerId: d.containerId, toContainerId: dest.id, resourceType: line.type, amount },
+          });
+          break;
+        }
+      }
     }
 
-    switch (d.state) {
-      case "hiding": {
-        const detaching = sv.mannies.find((m) => m.currentTask === "detaching_storage_container");
-        const seen = detaching ? (taskOf(detaching).artificialObjectDetected as { objectId?: string } | undefined)?.objectId : undefined;
-        if (seen && seen !== d.objectId) change({ ...d, objectId: seen, updatedAt: iso }, `Depot id is ${seen}`);
-        if (detaching || !settled(d)) { note(`Hiding "${d.containerId}" on ${d.asteroidName}.`); break; }
-        if (onboard(d.containerId)) {
-          change(null, `Depot on ${d.asteroidName} was not hidden; the container is still aboard ${name}.`);
-          break;
+    // More depots, one per poll, up to the setting: miners spread over them, so one can fill and come home while the others take loads.
+    const used = new Set(ds.map((x) => x.containerId));
+    if (cfg.depot && ds.length < cfg.depotContainers) {
+      if (isMoving(S)) { notes.push("The station is moving."); }
+      else {
+        const rock = asteroids(sv.sector)[0];
+        const room = spareRoom(S, sv.mannies);
+        const box = (S.inventory?.containers ?? [])
+          .filter((c) => c.kind === "container" && !used.has(c.id) && !isHandoffContainer(c) && !inFlight.has(c.id) && !reserved.has(c.id) && !holdsAnything(S, c) && (c.capacity ?? 0) >= DEPOT_MIN_CAPACITY)
+          .filter((c) => room - (c.capacity ?? 0) >= 0) // the Mannies outside still need room to dock
+          .sort((a, b) => (b.capacity ?? 0) - (a.capacity ?? 0))[0];
+        const m = rock && box ? take() : null;
+        if (!rock) notes.push("No asteroid with metals, ice or carbon in this sector.");
+        else if (!box) { if (!ds.length) notes.push("Waiting for an empty extra container on the station (with room left for the Mannies outside)."); }
+        else if (!m) notes.push(ds.length ? `Waiting for an idle Manny to hide depot ${ds.length + 1} of ${cfg.depotContainers}.` : "Waiting for an idle Manny to hide the depot.");
+        else {
+          const rockName = (rock.name as string | undefined) ?? rock.id!;
+          out.ops.push({
+            id: `depot_hide:${cfg.probeId}:${box.id}`, stationId: cfg.probeId,
+            label: `${m.name} hides "${box.label}" on ${rockName} as a mining depot`,
+            why: "Mining into a container hidden on the mined asteroid drops both travel legs (spec: MannyMineRequest.targetContainerId), so each load takes about half the time.",
+            endpoint: `POST /api/probe/${cfg.probeId}/mannies/${m.id}/detach-storage-container`,
+            plan: { kind: "depot_hide", probeId: cfg.probeId, mannyId: m.id, containerId: box.id, asteroidId: rock.id!, asteroidName: rockName, capacity: box.capacity ?? 0 },
+          });
         }
-        change({ ...d, state: "active", updatedAt: iso, note: null }, `Depot hidden on ${d.asteroidName}; Mannies now mine into it.`);
-        break;
-      }
-      case "active": {
-        if (d.lost) { note(`The depot ${d.objectId} on ${d.asteroidName} can't be found (GET sector-objects inventory: 404). Nothing new is mined into it; check that asteroid in the game.`); break; }
-        const miners = depotMiners(snapshot, d.objectId);
-        const rockThere = !sv.sector || allAsteroids(sv.sector).some((o) => o.id === d.asteroidId);
-        const full = d.contents !== null && d.capacity - d.contents < DEPOT_FULL_FREE;
-        const leaving = isMoving(S) || !rockThere;
-        if (!full && !leaving && cfg.depot) {
-          note(`Mining into the depot on ${d.asteroidName}: ${d.contents === null ? "?" : round(d.contents)} of ${round(d.capacity)} ECE, ${miners.length} Manny${miners.length === 1 ? "" : "s"} on it.`);
-          break;
-        }
-        if (miners.length) { note(`Depot ${full ? "is full" : "is being closed"}; waiting for ${miners.length} Manny${miners.length === 1 ? "" : "s"} to finish mining into it.`); break; }
-        if (isMoving(S)) { note("The station is moving; the depot stays hidden on the asteroid until it is back."); break; }
-        const m = take();
-        if (!m) { note("Depot is ready to bring home; waiting for an idle Manny."); break; }
-        out.ops.push({
-          id: `depot_recover:${cfg.probeId}`, stationId: cfg.probeId,
-          label: `${m.name} brings the depot on ${d.asteroidName} home`,
-          why: full ? `It holds ${round(d.contents!)} of ${round(d.capacity)} ECE.` : !rockThere ? "Its asteroid is no longer in the sector scan." : "The depot was switched off.",
-          endpoint: `POST /api/probe/${cfg.probeId}/mannies/${m.id}/recover-storage-container`,
-          plan: { kind: "depot_recover", probeId: cfg.probeId, mannyId: m.id, objectId: d.objectId },
-        });
-        break;
-      }
-      case "recovering": {
-        if (onboard(d.containerId)) {
-          change({ ...d, state: "emptying", updatedAt: iso }, `Depot container is back aboard ${name}; emptying it into the station's storage.`);
-          break;
-        }
-        if (now - new Date(d.updatedAt).getTime() > RECOVER_TIMEOUT_MS) {
-          change({ ...d, state: "active", updatedAt: iso, note: "The recovery didn't land; trying again." }, "Depot recovery didn't land within an hour; trying again.");
-          break;
-        }
-        note(`Bringing the depot home from ${d.asteroidName}.`);
-        break;
-      }
-      case "emptying": {
-        const box = onboard(d.containerId);
-        if (!box) { change(null, "Depot container is no longer aboard; starting over."); break; }
-        if (sv.mannies.some((m) => m.currentTask === "moving_stockage")) { note("Moving the depot's resources into the station's storage."); break; }
-        const lines = (S.inventory?.resourceStocks ?? []).flatMap((s) =>
-          (s.containers ?? []).filter((c) => c.container.id === d.containerId && c.amount > 0.0005).map((c) => ({ type: s.type as DepotResource, amount: c.amount })));
-        if (!lines.length || !cfg.depot) {
-          change(null, lines.length ? "Depot switched off; its container stays aboard as normal storage." : "Depot emptied; it will be hidden again.");
-          break;
-        }
-        const dest = (S.inventory?.containers ?? [])
-          .filter((c) => c.id !== d.containerId && !inFlight.has(c.id) && (c.kind === "probe" || !isHandoffContainer(c)) && (c.freeCapacity ?? 0) > 0.005)
-          .sort((a, b) => (b.freeCapacity ?? 0) - (a.freeCapacity ?? 0))[0];
-        if (!dest) {
-          change(null, "No room elsewhere aboard to empty the depot container; it stays aboard as normal storage and crafting will use it.");
-          break;
-        }
-        const m = take();
-        if (!m) { note("Waiting for an idle Manny to empty the depot container."); break; }
-        const line = lines[0];
-        const amount = Math.floor(Math.min(line.amount, (dest.freeCapacity ?? 0)) * 1000) / 1000;
-        if (amount < 0.001) { change(null, "Depot container is almost empty; it stays aboard as normal storage."); break; }
-        out.ops.push({
-          id: `depot_empty:${cfg.probeId}`, stationId: cfg.probeId,
-          label: `${m.name} moves ${amount} ECE ${line.type.replace("_", " ")} from the depot container to "${dest.label}"`,
-          why: "The depot container is emptied so it can go back out to the asteroid.",
-          endpoint: `POST /api/probe/${cfg.probeId}/storage-moves`,
-          plan: { kind: "depot_empty", probeId: cfg.probeId, mannyId: m.id, fromContainerId: d.containerId, toContainerId: dest.id, resourceType: line.type, amount },
-        });
-        break;
       }
     }
+    if (notes.length) out.notes[cfg.probeId] = notes.join(" ");
   }
   return out;
 }
