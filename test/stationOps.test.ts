@@ -165,3 +165,50 @@ test("a container held by a craft gets its reservation moved, then the hand-off 
     await mock.close();
   }
 });
+
+test("group probes with a printer build Mannies for a short station, borrow station Mannies, and send new ones home", async () => {
+  const { planHelpers, helperGoals } = await import("../src/server/production.ts");
+  const { mock, poller } = await setup();
+  try {
+    const snap = docked(poller.snapshot);
+    const [sv, hv] = snap.probes;
+    const mk = (prefix: string, n: number) => Array.from({ length: n }, (_, i) => ({ ...sv.mannies![0], id: `${prefix}${i}`, name: `${prefix}${i}` }));
+    sv.mannies = mk("s", 20);
+    hv.mannies = mk("h", 6);
+    const S = sv.detail as Probe;
+    const H = hv.detail as Probe;
+    S.inventory!.freeCapacity = 10;
+    H.inventory!.capacity = 3;
+    H.inventory!.freeCapacity = 2;
+    H.inventory!.items = H.inventory!.items.filter((i) => i.type !== "atomic_3d_printer");
+    const d = data({ mode: "parts", mannyTarget: 12 });
+    const queue = (id: number) => (id === 1 ? [{ id: "q", item: "manny", quantity: 50, once: true, addedAt: "" }] : []);
+
+    let plan = planHelpers(d.stations, d, snap, queue);
+    assert.equal(plan.want[1], 50, "a Manny line in the station's own queue counts");
+    assert.equal(plan.builders.size, 0);
+    assert.match(plan.notes[2], /no atomic printer/);
+
+    H.inventory!.items.push({ id: "printer", type: "atomic_3d_printer", name: "Atomic printer", containerSpace: 0.3 } as never);
+    plan = planHelpers(d.stations, d, snap, queue);
+    assert.equal(plan.builders.get(2), 1);
+    assert.equal(helperGoals(plan, snap)["2"][0].quantity, 7, "one Manny at a time: always one more than it has");
+    assert.equal(planHelpers(d.stations, d, snap, () => []).builders.size, 0, "20 Mannies already meet the station's target of 12");
+    assert.equal(planHelpers([{ ...d.stations[0], helperBuilds: false }], d, snap, queue).builders.size, 0, "switched off");
+
+    let ops = planService({ snapshot: snap, data: d, handoffs: [], busy: new Set(), recentRefuels: new Set(), helpers: plan });
+    const lend = ops.find((o) => o.plan.kind === "manny_move");
+    assert.ok(lend && lend.plan.kind === "manny_move" && lend.plan.probeId === 1 && lend.plan.targetProbeId === 2, "the station lends a Manny");
+
+    hv.mannies = mk("h", 13); // 6 Hauler + 6 lent + 1 just built
+    ops = planService({ snapshot: snap, data: d, handoffs: [], busy: new Set(), recentRefuels: new Set(), helpers: plan });
+    const home = ops.find((o) => o.plan.kind === "manny_move");
+    assert.ok(home && home.plan.kind === "manny_move" && home.plan.probeId === 2 && home.plan.targetProbeId === 1, "the new Manny goes to the station");
+
+    hv.mannies = mk("h", 12);
+    ops = planService({ snapshot: snap, data: d, handoffs: [], busy: new Set(), recentRefuels: new Set(), helpers: plan });
+    assert.ok(!ops.some((o) => o.plan.kind === "manny_move"), "at its target: nothing moves either way");
+  } finally {
+    await mock.close();
+  }
+});

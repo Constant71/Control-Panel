@@ -17,6 +17,7 @@ import { FALLBACK_MANNY_SPACE, pendingCargo } from "./automation.js";
 import { sectorOf } from "./stations.js";
 import type { Handoff, StationConfig, StationOp, StationsData, StorageRules } from "../shared/stations.js";
 import { ROLE_LABEL } from "../shared/stations.js";
+import type { HelperPlan } from "./production.js";
 
 type Probe = Schemas["Probe"];
 type Manny = Schemas["Manny"];
@@ -94,9 +95,11 @@ export interface ServiceInput {
   busy: Set<string>;
   /** Refuels ("<source>:<target>") and Manny moves ("manny:<source>:<target>") sent recently, so neither is sent twice. */
   recentRefuels: Set<string>;
+  /** Group probes building Mannies for their station: they borrow station Mannies and send new ones home. */
+  helpers?: HelperPlan | null;
 }
 
-export function planService({ snapshot, data, handoffs, busy, recentRefuels }: ServiceInput): StationOp[] {
+export function planService({ snapshot, data, handoffs, busy, recentRefuels, helpers }: ServiceInput): StationOp[] {
   const ops: StationOp[] = [];
   const views = new Map(snapshot.probes.map((v) => [v.summary.id, v]));
   const active = handoffs.filter((h) => h.state === "sent" || h.state === "recovering");
@@ -229,7 +232,10 @@ export function planService({ snapshot, data, handoffs, busy, recentRefuels }: S
       }
 
       // Manny split: keep each role's Manny target, moving idle Mannies between station and ferry.
-      const target = cfg.mannyPerRole[mem.role];
+      // A helper building Mannies borrows up to helperLend more, and every Manny above that goes home.
+      const helping = helpers?.builders.get(M.id) === cfg.probeId;
+      const target = cfg.mannyPerRole[mem.role] + (helping ? cfg.helperLend : 0);
+      const want = Math.max(cfg.mannyTarget, helpers?.want[cfg.probeId] ?? 0);
       const mCount = mv.mannies.length;
       const sCount = sv.mannies.length;
       const space = (p: Probe) => Math.max(0, ...(p.inventory?.items ?? []).filter((i) => i.type === "manny").map((i) => i.containerSpace)) || FALLBACK_MANNY_SPACE;
@@ -238,24 +244,26 @@ export function planService({ snapshot, data, handoffs, busy, recentRefuels }: S
         || recentRefuels.has(`manny:${cfg.probeId}:${M.id}`) || recentRefuels.has(`manny:${M.id}:${cfg.probeId}`);
       if (moving) {
         // one Manny move at a time per pair: counts only update once the transfer completes
-      } else if (mCount < target && sCount > cfg.mannyTarget && homeFree(M, mRoom) >= space(M)) {
+      } else if (mCount < target && (helping ? sCount > mCount : sCount > cfg.mannyTarget) && homeFree(M, mRoom) >= space(M)) {
         const m = sTake();
         if (m) {
           mRoom -= space(M);
           push({
             id: `manny:${m.id}:${M.id}`, label: `${m.name} moves from ${stationName} to ${name}`,
-            why: `${name} has ${mCount} Mannies (${ROLE_LABEL[mem.role]} target ${target}); ${stationName} has ${sCount}, above its ${cfg.mannyTarget}.`,
+            why: helping
+              ? `${name} builds Mannies for ${stationName} and borrows up to ${cfg.helperLend} to mine and craft for it (${mCount} of ${target} aboard).`
+              : `${name} has ${mCount} Mannies (${ROLE_LABEL[mem.role]} target ${target}); ${stationName} has ${sCount}, above its ${cfg.mannyTarget}.`,
             endpoint: `POST /api/probe/${cfg.probeId}/mannies/${m.id}/transfer-to-probe`,
             plan: { kind: "manny_move", probeId: cfg.probeId, mannyId: m.id, targetProbeId: M.id },
           });
         }
-      } else if (mCount > target && sCount < cfg.mannyTarget && sRoom >= space(S)) {
+      } else if (mCount > target && sCount < want && sRoom >= space(S)) {
         const m = mTake();
         if (m) {
           sRoom -= space(S);
           push({
             id: `manny:${m.id}:${cfg.probeId}`, label: `${m.name} moves from ${name} to ${stationName}`,
-            why: `${name} has ${mCount} Mannies (${ROLE_LABEL[mem.role]} target ${target}); ${stationName} has ${sCount}, below its ${cfg.mannyTarget}.`,
+            why: `${name} has ${mCount} Mannies (${helping ? "build helper" : ROLE_LABEL[mem.role]} target ${target}); ${stationName} has ${sCount}, below the ${want} it wants.`,
             endpoint: `POST /api/probe/${M.id}/mannies/${m.id}/transfer-to-probe`,
             plan: { kind: "manny_move", probeId: M.id, mannyId: m.id, targetProbeId: cfg.probeId },
           });

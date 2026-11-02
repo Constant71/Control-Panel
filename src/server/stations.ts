@@ -17,7 +17,7 @@ import { markOrdered, recentlyOrdered } from "./orders.js";
 import { detachedContainersIn, planService, sanitizeService, trackHandoffs } from "./stationOps.js";
 import { ACTIVE, planDispatch } from "./dispatch.js";
 import type { SectorKnowledge } from "./discovery.js";
-import { productionGoals, toCraftGoals } from "./production.js";
+import { helperGoals, planHelpers, productionGoals, toCraftGoals, type HelperPlan } from "./production.js";
 import { fleeCard, type FleeApproval } from "./flee.js";
 import { planStationTankers } from "./stationTanker.js";
 import type { CraftGoal } from "../shared/crafting.js";
@@ -101,6 +101,7 @@ const clamp = (v: unknown, lo: number, hi: number, dflt: number) => {
 /** Read-only picture of every station: stock against targets, group, and readiness checks. */
 export function stationStatus(
   snapshot: Snapshot, data: StationsData, next: StationOp[] = [], handoffs: Handoff[] = [], trips: Trip[] = [], dispatchNotes: Record<number, string[]> = {},
+  helpers: HelperPlan | null = null,
 ): StationStatus[] {
   const views = new Map(snapshot.probes.map((v) => [v.summary.id, v]));
   return data.stations.map((cfg) => {
@@ -134,9 +135,11 @@ export function stationStatus(
         if (!mv) notes.push("This probe is no longer in your fleet.");
         else if (!mv.summary.isReachable) notes.push("Out of command range: no orders can reach it until coverage returns.");
         if (!m.role) notes.push("No role yet. Pick one so the station knows what to use it for.");
+        const helperNote = helpers?.notes[Number(id)];
+        if (helperNote) notes.push(helperNote);
         const isMoving = mp ? moving(mp) : false;
         const docked = !!mp && same(msector, sector) && !isMoving;
-        const target = m.role ? cfg.mannyPerRole[m.role] : null;
+        const target = m.role ? cfg.mannyPerRole[m.role] + (helpers?.builders.has(Number(id)) ? cfg.helperLend : 0) : null;
         const mannies = mv?.mannies?.length ?? null;
         if (target !== null && mannies !== null && mannies < target) notes.push(`${target - mannies} Manny short of the ${ROLE_LABEL[m.role!]} target of ${target}.`);
         const extra = mp?.inventory ? mp.inventory.containers.filter((c) => c.kind === "container").length : null;
@@ -228,6 +231,8 @@ export interface StationsDeps {
   hold?: (noExplore: Set<number>, noMining: Set<number>) => void;
   /** Hands each station's production goals to the crafting planner. */
   goals?: (byProbe: Record<string, CraftGoal[]>) => void;
+  /** Your own crafting queue for a probe (a Manny line on the station starts helper builds too). */
+  queued?: (probeId: number) => CraftGoal[];
 }
 
 export class Stations extends EventEmitter {
@@ -237,6 +242,8 @@ export class Stations extends EventEmitter {
   next: StationOp[] = [];
   dispatchNotes: Record<number, string[]> = {};
   fleeCards: Record<number, FleeCard> = {};
+  /** Which group probes build Mannies for their station (worked out every poll). */
+  helpers: HelperPlan | null = null;
   private readonly refuels = new Map<string, number>();
   /** Rules updates sent recently: if the next poll still shows old rules, wait before sending again. */
   private readonly rulesSent = new Map<string, number>();
@@ -279,7 +286,7 @@ export class Stations extends EventEmitter {
   }
 
   status(): StationStatus[] {
-    return stationStatus(this.deps.snapshot(), this.data, this.next, this.data.handoffs, this.data.trips, this.dispatchNotes).map((st) => {
+    return stationStatus(this.deps.snapshot(), this.data, this.next, this.data.handoffs, this.data.trips, this.dispatchNotes, this.helpers).map((st) => {
       const card = this.fleeCards[st.probeId] ?? null;
       if (card && !card.approved) st.checks.unshift({ ok: false, text: `Danger: ${card.reasons.join(" ")} Decide on the flee card.` });
       if (card?.approved) st.checks.unshift({ ok: false, text: `Fleeing to (${card.approved.target.x}, ${card.approved.target.y}, ${card.approved.target.z}): ${card.approved.state}.` });
@@ -340,6 +347,8 @@ export class Stations extends EventEmitter {
     if (patch.targets !== undefined) cfg.targets = sanitizeTargets(patch.targets);
     if (patch.fuelFloorPercent !== undefined) cfg.fuelFloorPercent = clamp(patch.fuelFloorPercent, 0, 100, cfg.fuelFloorPercent);
     if (patch.mannyTarget !== undefined) cfg.mannyTarget = clamp(patch.mannyTarget, 0, 500, cfg.mannyTarget);
+    if (typeof patch.helperBuilds === "boolean") cfg.helperBuilds = patch.helperBuilds;
+    if (patch.helperLend !== undefined) cfg.helperLend = clamp(patch.helperLend, 0, 50, cfg.helperLend);
     if (typeof patch.dispatch === "boolean") cfg.dispatch = patch.dispatch;
     if (patch.stationTankerReservePercent !== undefined) cfg.stationTankerReservePercent = clamp(patch.stationTankerReservePercent, 5, 90, cfg.stationTankerReservePercent);
     if (patch.fleeIntegrityPercent !== undefined) cfg.fleeIntegrityPercent = clamp(patch.fleeIntegrityPercent, 0, 100, cfg.fleeIntegrityPercent);
@@ -547,11 +556,17 @@ export class Stations extends EventEmitter {
     const grouped = new Set<number>([...this.data.stations.map((x) => x.probeId), ...Object.keys(this.data.members).map(Number)]);
     const fleeing = new Set(Object.keys(this.data.flee).map(Number));
     this.deps.hold?.(grouped, new Set([...dispatch.noMining, ...fleeing]));
-    this.deps.goals?.(Object.fromEntries(this.data.stations.map((c) => [String(c.probeId), toCraftGoals(c.probeId, productionGoals(c, this.data, snapshot))])));
+    const helpers = planHelpers(this.data.stations, this.data, snapshot, (id) => this.deps.queued?.(id) ?? []);
+    for (const id of fleeing) for (const [h, st] of helpers.builders) if (st === id) helpers.builders.delete(h);
+    this.helpers = helpers;
+    this.deps.goals?.({
+      ...helperGoals(helpers, snapshot),
+      ...Object.fromEntries(this.data.stations.map((c) => [String(c.probeId), toCraftGoals(c.probeId, productionGoals(c, this.data, snapshot))])),
+    });
     const away = new Set(this.data.trips.filter((x) => ACTIVE.includes(x.state) && x.state !== "handing_over").map((x) => x.haulerId));
     for (const o of dispatch.ops) if (o.plan.kind === "trip_move") away.add(o.plan.probeId); // leaving now: no new docked work
     const service = planService({
-      snapshot, data: this.data, handoffs: this.data.handoffs, busy, recentRefuels: new Set(this.refuels.keys()),
+      snapshot, data: this.data, handoffs: this.data.handoffs, busy, recentRefuels: new Set(this.refuels.keys()), helpers,
     }).filter((o) => !((o.plan.kind === "detach" || o.plan.kind === "refuel") &&
       (away.has(o.plan.probeId) || away.has(o.plan.kind === "detach" ? o.plan.toProbeId : o.plan.targetProbeId))));
     // A station that is fleeing starts nothing new: no trips out, no hand-offs, no refuels.

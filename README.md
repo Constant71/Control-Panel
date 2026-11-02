@@ -307,6 +307,14 @@ already has an item, your goal is used instead of the station's.
 - **Manny split (always on):** while a group probe is docked, idle Mannies move between it and the station
   (`transfer-to-probe`) to meet each role's Manny target. They only move if the receiver has room, and only one move
   runs per pair at a time.
+- **Helpers build Mannies (on by default, per station):** the atomic printer runs one craft at a time on each probe
+  (`atomic-printer/craft` returns 409 `atomic_printer_busy`), and a Manny needs hours of printing, so one printer is the
+  limit. While the station has fewer Mannies than it wants (its Manny factory goal, or a `manny` line in its own crafting
+  queue), every group probe except Scouts that has an `atomic_3d_printer` and at least 2 ECE of storage gets a goal of one
+  Manny more than it has, so its printer keeps working. Its own automation mines what that needs. While docked, it
+  borrows up to "Mannies lent to each build helper" (default 6) from the station, as long as the station keeps more than
+  the helper has. Every Manny above its role target plus that loan moves to the station (`transfer-to-probe`). Each
+  helper's card on the Stations page says whether it is building and why not.
 - The spec's `MannyCraftRequest` only takes `recipe`, so the panel doesn't rely on one Manny crafting a whole chain
   ("whole build"). It crafts parts first instead.
 
