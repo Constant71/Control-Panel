@@ -15,8 +15,10 @@ import type { ProbeRole } from "../shared/automation.js";
 import type { AutoFixMode } from "../shared/problems.js";
 import { markOrdered, recentlyOrdered } from "./orders.js";
 import { detachedContainersIn, planService, sanitizeService, trackHandoffs } from "./stationOps.js";
+import { ACTIVE, planDispatch } from "./dispatch.js";
+import type { SectorKnowledge } from "./discovery.js";
 import {
-  DEFAULT_STATION, MEMBER_ROLES, type Check, type Handoff, type StationOp, type MemberRole, type MemberStatus, type StationConfig, type StationLogEntry,
+  DEFAULT_STATION, MEMBER_ROLES, type Check, type Handoff, type StationOp, type Trip, type MemberRole, type MemberStatus, type StationConfig, type StationLogEntry,
   type StationMode, type StationStatus, type StationsData, type StockTarget, type TargetStatus,
 } from "../shared/stations.js";
 
@@ -29,6 +31,7 @@ interface StoredData extends StationsData {
   /** Probe ids seen so far, so a newly assembled probe can join the station it was built at. */
   knownProbes: number[] | null;
   handoffs: Handoff[];
+  trips: Trip[];
   /** Op id -> retry-after ISO, after a refused call. */
   failures: Record<string, string>;
 }
@@ -38,7 +41,7 @@ const FAIL_BACKOFF_MS = 10 * 60_000;
 /** A deuterium transfer takes five minutes (spec); don't send another to the same pair meanwhile. */
 const REFUEL_GAP_MS = 7 * 60_000;
 const RULES_GAP_MS = 30 * 60_000;
-const emptyData = (): StoredData => ({ stations: [], members: {}, log: [], knownProbes: null, handoffs: [], failures: {} });
+const emptyData = (): StoredData => ({ stations: [], members: {}, log: [], knownProbes: null, handoffs: [], trips: [], failures: {} });
 
 export class StationError extends Error {
   constructor(readonly status: number, message: string) {
@@ -90,7 +93,9 @@ const clamp = (v: unknown, lo: number, hi: number, dflt: number) => {
 };
 
 /** Read-only picture of every station: stock against targets, group, and readiness checks. */
-export function stationStatus(snapshot: Snapshot, data: StationsData, next: StationOp[] = [], handoffs: Handoff[] = []): StationStatus[] {
+export function stationStatus(
+  snapshot: Snapshot, data: StationsData, next: StationOp[] = [], handoffs: Handoff[] = [], trips: Trip[] = [], dispatchNotes: Record<number, string[]> = {},
+): StationStatus[] {
   const views = new Map(snapshot.probes.map((v) => [v.summary.id, v]));
   return data.stations.map((cfg) => {
     const v = views.get(cfg.probeId);
@@ -166,6 +171,9 @@ export function stationStatus(snapshot: Snapshot, data: StationsData, next: Stat
     const lost = members.filter((m) => !m.reachable).length;
     if (lost) checks.push({ ok: false, text: `${lost} group probe${lost > 1 ? "s are" : " is"} out of command range.` });
     const dayAgo = Date.now() - 86_400_000;
+    for (const t of trips)
+      if (t.stationId === cfg.probeId && t.state === "failed" && new Date(t.updatedAt).getTime() > dayAgo)
+        checks.push({ ok: false, text: `Trip to (${t.target.x}, ${t.target.y}, ${t.target.z}) failed: ${t.note ?? "unknown reason"}` });
     for (const h of handoffs)
       if (h.stationId === cfg.probeId && h.state === "failed" && new Date(h.updatedAt).getTime() > dayAgo)
         checks.push({ ok: false, text: `Hand-off of ${h.containerId} failed: ${h.note ?? "unknown reason"}` });
@@ -190,6 +198,8 @@ export function stationStatus(snapshot: Snapshot, data: StationsData, next: Stat
       checks,
       next: next.filter((o) => o.stationId === cfg.probeId),
       handoffs: handoffs.filter((h) => h.stationId === cfg.probeId).slice(-20).reverse(),
+      trips: trips.filter((x) => x.stationId === cfg.probeId).slice(-20).reverse(),
+      dispatchNotes: dispatchNotes[cfg.probeId] ?? [],
     };
   });
 }
@@ -202,6 +212,12 @@ export interface StationsDeps {
   now?: () => number;
   /** The automation mode (auto / dry_run / off) also governs docked service. */
   mode?: () => AutoFixMode;
+  /** Known sector contents for trips (visited-sector scans). */
+  sectors?: () => SectorKnowledge[];
+  /** Learned deuterium per sector of distance, by probe model. */
+  costPerSector?: () => Record<string, number>;
+  /** Tells the regular automation which probes stations control. */
+  hold?: (noExplore: Set<number>, noMining: Set<number>) => void;
 }
 
 export class Stations extends EventEmitter {
@@ -209,6 +225,7 @@ export class Stations extends EventEmitter {
   private data: StoredData = emptyData();
   /** What docked service planned on the last poll. */
   next: StationOp[] = [];
+  dispatchNotes: Record<number, string[]> = {};
   private readonly refuels = new Map<string, number>();
   /** Rules updates sent recently: if the next poll still shows old rules, wait before sending again. */
   private readonly rulesSent = new Map<string, number>();
@@ -228,6 +245,10 @@ export class Stations extends EventEmitter {
     return this.data.handoffs;
   }
 
+  get trips(): Trip[] {
+    return this.data.trips;
+  }
+
   get stations(): StationConfig[] {
     return this.data.stations;
   }
@@ -245,7 +266,7 @@ export class Stations extends EventEmitter {
   }
 
   status(): StationStatus[] {
-    return stationStatus(this.deps.snapshot(), this.data, this.next, this.data.handoffs);
+    return stationStatus(this.deps.snapshot(), this.data, this.next, this.data.handoffs, this.data.trips, this.dispatchNotes);
   }
 
   private now(): number {
@@ -301,6 +322,9 @@ export class Stations extends EventEmitter {
     if (patch.targets !== undefined) cfg.targets = sanitizeTargets(patch.targets);
     if (patch.fuelFloorPercent !== undefined) cfg.fuelFloorPercent = clamp(patch.fuelFloorPercent, 0, 100, cfg.fuelFloorPercent);
     if (patch.mannyTarget !== undefined) cfg.mannyTarget = clamp(patch.mannyTarget, 0, 500, cfg.mannyTarget);
+    if (typeof patch.dispatch === "boolean") cfg.dispatch = patch.dispatch;
+    if (patch.maxTripHours !== undefined) cfg.maxTripHours = clamp(patch.maxTripHours, 1, 72, cfg.maxTripHours);
+    if (patch.tripFuelMarginPercent !== undefined) cfg.tripFuelMarginPercent = clamp(patch.tripFuelMarginPercent, 0, 90, cfg.tripFuelMarginPercent);
     if (patch.mannyPerRole && typeof patch.mannyPerRole === "object")
       for (const r of MEMBER_ROLES) if (r in patch.mannyPerRole) cfg.mannyPerRole[r] = clamp(patch.mannyPerRole[r], 0, 100, cfg.mannyPerRole[r]);
     sanitizeService(cfg, patch, clamp);
@@ -388,9 +412,28 @@ export class Stations extends EventEmitter {
     }
     if (this.data.handoffs.length > 200) this.data.handoffs.splice(0, this.data.handoffs.length - 200);
     for (const [k, at] of this.refuels) if (t - at > REFUEL_GAP_MS) this.refuels.delete(k);
-    this.next = planService({
-      snapshot, data: this.data, handoffs: this.data.handoffs, busy: recentlyOrdered(t), recentRefuels: new Set(this.refuels.keys()),
+    const busy = recentlyOrdered(t);
+    // Trips first: they decide which Haulers leave, and their Mannies.
+    const dispatch = planDispatch({
+      snapshot, data: this.data, status: stationStatus(snapshot, this.data), trips: this.data.trips, handoffs: this.data.handoffs,
+      sectors: this.deps.sectors?.() ?? [], costPerSector: this.deps.costPerSector?.() ?? {}, busy, now: t,
+      recentRefuels: new Set(this.refuels.keys()),
     });
+    for (const { trip, note, ok } of dispatch.changes) {
+      this.addLog({ stationId: trip.stationId, probeId: trip.haulerId, label: `Trip to (${trip.target.x}, ${trip.target.y}, ${trip.target.z}): ${trip.state}`, endpoint: null, ok, message: note });
+      changed = true;
+    }
+    if (this.data.trips.length > 200) this.data.trips.splice(0, this.data.trips.length - 200);
+    this.dispatchNotes = dispatch.notes;
+    const grouped = new Set<number>([...this.data.stations.map((x) => x.probeId), ...Object.keys(this.data.members).map(Number)]);
+    this.deps.hold?.(grouped, dispatch.noMining);
+    const away = new Set(this.data.trips.filter((x) => ACTIVE.includes(x.state) && x.state !== "handing_over").map((x) => x.haulerId));
+    for (const o of dispatch.ops) if (o.plan.kind === "trip_move") away.add(o.plan.probeId); // leaving now: no new docked work
+    const service = planService({
+      snapshot, data: this.data, handoffs: this.data.handoffs, busy, recentRefuels: new Set(this.refuels.keys()),
+    }).filter((o) => !((o.plan.kind === "detach" || o.plan.kind === "refuel") &&
+      (away.has(o.plan.probeId) || away.has(o.plan.kind === "detach" ? o.plan.toProbeId : o.plan.targetProbeId))));
+    this.next = [...dispatch.ops, ...service];
     const mode = this.deps.mode?.() ?? "auto";
     let acted = false;
     if (mode !== "off") {
@@ -458,6 +501,27 @@ export class Stations extends EventEmitter {
           if (h) Object.assign(h, { state: "recovering", updatedAt: new Date(t).toISOString(), note: "Recovering it from the sector." });
           break;
         }
+        case "trip_move": {
+          unwrap(await c.POST("/api/probe/{probeId}/move", { params: { path: { probeId: plan.probeId } }, body: { target: plan.target } }));
+          const now = new Date(t).toISOString();
+          if (plan.leg === "out") {
+            const home = sectorOf(snapshot.probes.find((v) => v.summary.id === plan.probeId)) ?? { x: 0, y: 0, z: 0 };
+            this.data.trips.push({
+              id: plan.tripId, stationId: op.stationId, haulerId: plan.probeId, target: plan.target, home, resource: plan.resource, reason: plan.reason,
+              state: "outbound", startedAt: now, updatedAt: now, arrivedAt: null, note: "On the way.",
+            });
+          } else {
+            const trip = this.data.trips.find((x) => x.id === plan.tripId);
+            if (trip) Object.assign(trip, { state: "returning", updatedAt: now, note: "Flying home." });
+          }
+          break;
+        }
+        case "trip_mine":
+          unwrap(await c.POST("/api/probe/{probeId}/mannies/{mannyId}/mine", {
+            params: { path: { probeId: plan.probeId, mannyId: plan.mannyId } },
+            body: { objectId: plan.objectId, resources: [plan.resource as never], targetAmount: plan.targetAmount },
+          }));
+          break;
         case "refuel":
           unwrap(await c.POST("/api/probe/{probeId}/mannies/{mannyId}/transfer-deuterium-to-probe", {
             params: { path: { probeId: plan.probeId, mannyId: plan.mannyId } }, body: { targetProbeId: plan.targetProbeId, amount: plan.amount },

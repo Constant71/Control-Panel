@@ -20,6 +20,9 @@ const post = (url: string, body: unknown) =>
 const nice = (t: string) => t.replaceAll("_", " ");
 const vec = (v: { x: number; y: number; z: number } | null) => (v ? `${v.x}, ${v.y}, ${v.z}` : "?");
 const RESOURCES: StockResource[] = ["metals", "ice", "carbon_compounds", "deuterium"];
+const TRIP_TEXT: Record<string, string> = {
+  outbound: "flying out", mining: "mining", returning: "flying home", handing_over: "handing over", done: "done", failed: "failed",
+};
 
 const MODE_TEXT: Record<StationMode, string> = {
   parts: "Crafts parts toward the stock targets.",
@@ -123,6 +126,7 @@ function StationCard({ s, free, recipes, run }: {
   const [editing, setEditing] = useState(false);
   const update = (patch: Partial<StationConfig>) => run(() => post("panel-api/stations/update", { probeId: s.probeId, patch }));
   const bad = s.checks.filter((c) => !c.ok).length;
+  const nameOf = (id: number) => s.members.find((m) => m.probeId === id)?.name ?? `Probe ${id}`;
   return (
     <div className="card station">
       <div className="card-h">
@@ -181,6 +185,30 @@ function StationCard({ s, free, recipes, run }: {
         {s.members.map((m) => <MemberRow key={m.probeId} m={m} stationId={s.probeId} run={run} />)}
       </div>
       <AddMember stationId={s.probeId} free={free} run={run} />
+
+      <div className="card-h mt">
+        <div className="tiny"><b>Trips</b> <span className="muted">Haulers fetch what the station is short of, inside the SCUT network</span></div>
+        <span className="spacer" />
+        <div className="mode">
+          <button className={s.config.dispatch ? "on" : ""} onClick={() => update({ dispatch: true })}>on</button>
+          <button className={!s.config.dispatch ? "on" : ""} onClick={() => update({ dispatch: false })}>off</button>
+        </div>
+      </div>
+      {s.dispatchNotes.length > 0 && <ul className="plain tiny muted">{s.dispatchNotes.map((n, i) => <li key={i}>{n}</li>)}</ul>}
+      {s.trips.length > 0 && (
+        <div className="members">
+          {s.trips.slice(0, 6).map((t) => (
+            <div key={t.id} className="member">
+              <div className="row wrap">
+                <b>{nameOf(t.haulerId)}</b>
+                <span className={`tag ${t.state === "failed" ? "" : t.state === "done" ? "" : "auto"}`}>{TRIP_TEXT[t.state]}</span>
+                <span className="tiny muted">{nice(t.resource)} from ({t.target.x}, {t.target.y}, {t.target.z})</span>
+              </div>
+              <div className={`tiny ${t.state === "failed" ? "warn-text" : "muted"}`}>{t.note ?? ""} <span className="muted">Why: {t.reason}.</span></div>
+            </div>
+          ))}
+        </div>
+      )}
 
       <div className="card-h mt">
         <div className="tiny"><b>Docked service</b> <span className="muted">hand-offs and refuelling while a group probe is in this sector</span></div>
@@ -283,6 +311,8 @@ function TargetEditor({ cfg, recipes, onSave }: { cfg: StationConfig; recipes: s
   const [boxes, setBoxes] = useState(cfg.containersPerHauler);
   const [ferryFuel, setFerryFuel] = useState(cfg.ferryFuelTargetPercent);
   const [reserve, setReserve] = useState(cfg.tankerReservePercent);
+  const [tripHours, setTripHours] = useState(cfg.maxTripHours);
+  const [tripMargin, setTripMargin] = useState(cfg.tripFuelMarginPercent);
   const [newKind, setNewKind] = useState<"resource" | "item">("resource");
   const [newName, setNewName] = useState("");
   const set = (i: number, min: number) => setTargets(targets.map((t, j) => (j === i ? { ...t, min } : t)));
@@ -316,6 +346,8 @@ function TargetEditor({ cfg, recipes, onSave }: { cfg: StationConfig; recipes: s
         <div key={r} className="row"><span className="grow">Mannies per {r}</span>
           <input type="number" min={0} value={perRole[r]} onChange={(e) => setPerRole({ ...perRole, [r]: Number(e.target.value) })} /><span className="unit" /></div>
       ))}
+      <div className="row"><span className="grow">Longest stay at a mining sector</span><input type="number" min={1} max={72} value={tripHours} onChange={(e) => setTripHours(Number(e.target.value))} /><span className="unit">h</span></div>
+      <div className="row"><span className="grow">Fuel left after a round trip</span><input type="number" min={0} max={90} value={tripMargin} onChange={(e) => setTripMargin(Number(e.target.value))} /><span className="unit">%</span></div>
       <div className="row"><span className="grow">Hand over containers at least this full</span><input type="number" min={1} max={100} value={fill} onChange={(e) => setFill(Number(e.target.value))} /><span className="unit">%</span></div>
       <div className="row"><span className="grow">Containers per Hauler (max 4)</span><input type="number" min={0} max={4} value={boxes} onChange={(e) => setBoxes(Number(e.target.value))} /><span className="unit" /></div>
       <div className="row"><span className="grow">Top up docked probes to</span><input type="number" min={0} max={100} value={ferryFuel} onChange={(e) => setFerryFuel(Number(e.target.value))} /><span className="unit">%</span></div>
@@ -323,6 +355,7 @@ function TargetEditor({ cfg, recipes, onSave }: { cfg: StationConfig; recipes: s
       <button onClick={() => onSave({
         targets, fuelFloorPercent: fuel, mannyTarget: mannies, mannyPerRole: perRole,
         handoffMinFillPercent: fill, containersPerHauler: boxes, ferryFuelTargetPercent: ferryFuel, tankerReservePercent: reserve,
+        maxTripHours: tripHours, tripFuelMarginPercent: tripMargin,
       })}>Save settings</button>
     </div>
   );

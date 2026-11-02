@@ -243,7 +243,31 @@ automation mode (auto, dry run, off).
 - No Idempotency-Key is sent: the spec doesn't list one for these endpoints. A detach can't be doubled anyway,
   because the container leaves the sender's inventory as soon as the order is accepted.
 
-Dispatch trips, production modes, flee cards and station stuck fixes follow in 5c to 5e.
+## Step 5c: Dispatch and hauler trips
+
+Each poll, the panel compares every station's raw resource targets (metals, ice, carbon compounds) with its stock.
+When one is short, an idle docked Hauler goes to fetch it. Each card on the Stations page explains why a trip is
+or isn't going out.
+
+- **Where:** the nearest sector that the visited-sector scans (`GET /api/sector`) show holding that resource. It must
+  be covered by a SCUT network the default probe is on, so the Hauler stays in command range the whole time. Sectors
+  with a black hole or missile are skipped. Moves inside range run on their own, as agreed.
+- **Checks before leaving:** at least 40% integrity; hand-off containers at least half empty; no hand-off or refuel
+  in progress; every Manny aboard and idle. Fuel must cover the round trip (from the move cost learned on earlier
+  moves) and still leave 20% of the tank. While the cost isn't known yet, the trip waits for 80% fuel.
+- **At the mining sector:** the trip sends idle Mannies to mine that resource (`POST .../mine`). It keeps one Manny
+  idle, and only sends what fits in the hand-off containers, keeping room for every Manny to come home. The regular
+  mining automation leaves the Hauler alone during the trip.
+- **Heading home:** once the hand-off containers reach the hand-over threshold, nothing there holds the resource any
+  more, or it has spent 6 hours there. It waits until every Manny is aboard, then flies home. Docked service hands the
+  containers over, and the trip ends.
+- **Problems:** a move that never starts, a failed movement, or 30 minutes out of command range mark the trip
+  failed. The station card shows this.
+- Exploration and the regular mining leave stations and their groups alone. The map marks stations with an
+  outlined S.
+- Each station can switch trips off. The longest stay and the fuel margin are editable.
+
+Production modes, flee cards and station stuck fixes follow in 5d and 5e.
 
 ## Develop
 
@@ -264,4 +288,4 @@ The mock (`mock/`) is typed against the generated schema too, so it can't drift 
 3. 24/7 automation: 3a mining, construct inspection, naming; 3b crafting and probe-build suggestions; 3c exploration. Rules (mining, crafting, repair, deuterium, storage, exploration within SCUT range, inspecting dormant constructs, probe-build suggestions, automatic naming)
 4. Remaining endpoints as manual controls, plus messaging, logbook and forum
 5. Stations (from the Stations design): 5a designation, groups and stock targets; 5b container hand-offs and
-   refuelling while docked (this); 5c dispatch loop and hauler trips; 5d production modes; 5e flee cards and stuck fixes
+   refuelling while docked; 5c dispatch loop and hauler trips (this); 5d production modes; 5e flee cards and stuck fixes

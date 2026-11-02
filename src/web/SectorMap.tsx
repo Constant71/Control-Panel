@@ -85,6 +85,13 @@ export function SectorMap({ state }: { state: PanelState }) {
             );
           })}
           <circle cx={sx(0) + C / 2} cy={sy(0) + C / 2} r={C / 2 - 2} className="home" />
+          {probePos.filter((p) => (state.stationIds ?? []).includes(p.id) && inLayer(p.pos)).map((p) => (
+            <g key={"st" + p.id}>
+              <rect x={sx(p.pos.x) + 1} y={sy(p.pos.y) + 1} width={C - 2} height={C - 2} rx={6} className="station-mark" />
+              <text x={sx(p.pos.x) + 4} y={sy(p.pos.y) + 12} className="station-label">S</text>
+              <title>{`Station ${p.name}`}</title>
+            </g>
+          ))}
           {probePos.filter((p) => p.target && inLayer(p.pos)).map((p) => (
             <line key={"mv" + p.id} x1={sx(p.pos.x) + C / 2} y1={sy(p.pos.y) + C / 2}
               x2={sx(p.target!.x) + C / 2} y2={sy(p.target!.y) + C / 2} className="route" />
@@ -99,7 +106,7 @@ export function SectorMap({ state }: { state: PanelState }) {
         </svg>
       </div>
       <p className="muted tiny">
-        Squares are visited sectors, dots are probes (hollow means out of SCUT range), dashed lines are moves in progress, and the ring is
+        Squares are visited sectors, dots are probes (hollow means out of SCUT range), dashed lines are moves in progress (including station trips), an outlined square marked S is a station, and the ring is
         your home sector (0, 0, 0). The view is top-down x/y{layer === "all" ? " with every z layer overlaid" : ""}.
       </p>
       {selected && (

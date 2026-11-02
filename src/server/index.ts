@@ -50,6 +50,11 @@ const stations = new Stations(game, config.dataDir, {
   snapshot: () => poller.snapshot,
   onActed: () => poller.refreshSoon(2000),
   mode: () => automation.settings.mode,
+  sectors: () => discovery.sectorKnowledge(),
+  costPerSector: () => automation.costPerSector,
+  hold: (noExplore, noMining) => {
+    automation.stationHold = { noExplore, noMining };
+  },
 });
 
 // After every refresh: fix first (urgent), then automation, then scan for discoveries.

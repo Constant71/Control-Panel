@@ -35,7 +35,31 @@ export interface StationConfig {
   ferryFuelTargetPercent: number;
   /** A docked Tanker never gives the station fuel below this percent of its own tank. */
   tankerReservePercent: number;
+  /** Dispatch (5c): send idle Haulers to mine what the station is short of, inside its SCUT network. */
+  dispatch: boolean;
+  /** A trip heads home after this long at the mining sector, full or not. */
+  maxTripHours: number;
+  /** Fuel left after the round trip must stay above this percent of the tank. */
+  tripFuelMarginPercent: number;
   createdAt: string;
+}
+
+export type TripState = "outbound" | "mining" | "returning" | "handing_over" | "done" | "failed";
+
+export interface Trip {
+  id: string;
+  stationId: number;
+  haulerId: number;
+  target: { x: number; y: number; z: number };
+  home: { x: number; y: number; z: number };
+  resource: string;
+  reason: string;
+  state: TripState;
+  startedAt: string;
+  updatedAt: string;
+  /** When the hauler reached the mining sector. */
+  arrivedAt: string | null;
+  note: string | null;
 }
 
 export interface StorageRules {
@@ -48,7 +72,9 @@ export type StationOpPlan =
   | { kind: "rules"; probeId: number; containerId: string; rules: StorageRules }
   | { kind: "detach"; probeId: number; mannyId: string; containerId: string; toProbeId: number; purpose: "full" | "empty" }
   | { kind: "refuel"; probeId: number; mannyId: string; targetProbeId: number; amount: number }
-  | { kind: "recover"; probeId: number; mannyId: string; objectId: string; handoffId: string };
+  | { kind: "recover"; probeId: number; mannyId: string; objectId: string; handoffId: string }
+  | { kind: "trip_move"; probeId: number; target: { x: number; y: number; z: number }; tripId: string; leg: "out" | "home"; resource: string; reason: string }
+  | { kind: "trip_mine"; probeId: number; mannyId: string; objectId: string; resource: string; targetAmount: number; tripId: string };
 
 export interface StationOp {
   id: string;
@@ -147,6 +173,9 @@ export interface StationStatus {
   /** What docked service would do next, with reasons. */
   next: StationOp[];
   handoffs: Handoff[];
+  trips: Trip[];
+  /** Why dispatch is or isn't sending a trip right now. */
+  dispatchNotes: string[];
 }
 
 export const DEFAULT_STATION: Omit<StationConfig, "probeId" | "createdAt"> = {
@@ -164,6 +193,9 @@ export const DEFAULT_STATION: Omit<StationConfig, "probeId" | "createdAt"> = {
   containersPerHauler: 2,
   ferryFuelTargetPercent: 90,
   tankerReservePercent: 30,
+  dispatch: true,
+  maxTripHours: 6,
+  tripFuelMarginPercent: 20,
 };
 
 export const MODE_LABEL: Record<StationMode, string> = {

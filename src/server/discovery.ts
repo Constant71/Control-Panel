@@ -14,6 +14,18 @@ import { unwrap, GameError } from "./gameClient.js";
 import type { Snapshot } from "./poller.js";
 import { JsonStore } from "./store.js";
 import type { Discovery, DiscoveryKind, SectorScanInfo } from "../shared/problems.js";
+import { mineableTargets } from "./automation.js";
+
+/** What the panel knows about a sector for hauler trips (Stations 5c). */
+export interface SectorKnowledge {
+  sector: Vec;
+  scannedAt: string | null;
+  /** ECE per mineable resource, summed over mineable targets (0 when the scan gives no amounts). */
+  resources: Record<string, number>;
+  scutNetworkIds: number[];
+  coverage: string | null;
+  hazards: string[];
+}
 
 type Vec = { x: number; y: number; z: number };
 const keyOf = (v: Vec) => `${v.x},${v.y},${v.z}`;
@@ -24,6 +36,9 @@ interface SectorRecord {
   knowledgeLevel: string | null;
   objects: Array<{ id: string; type: string; name: string | null; summary: string | null }>;
   error: string | null;
+  resources?: Record<string, number>;
+  scutNetworkIds?: number[];
+  coverage?: string | null;
 }
 
 interface DiscoveryState {
@@ -79,6 +94,13 @@ export class DiscoveryTracker extends EventEmitter {
   scans(): SectorScanInfo[] {
     return Object.entries(this.state.sectors).map(([key, s]) => ({
       key, sector: s.sector, scannedAt: s.scannedAt, objectCount: s.objects.length, knowledgeLevel: s.knowledgeLevel, error: s.error,
+    }));
+  }
+
+  sectorKnowledge(): SectorKnowledge[] {
+    return Object.values(this.state.sectors).map((s) => ({
+      sector: s.sector, scannedAt: s.scannedAt, resources: s.resources ?? {}, scutNetworkIds: s.scutNetworkIds ?? [], coverage: s.coverage ?? null,
+      hazards: s.objects.filter((o) => o.type === "black_hole" || o.type === "missile").map((o) => o.type),
     }));
   }
 
@@ -163,7 +185,13 @@ export class DiscoveryTracker extends EventEmitter {
       id: String(o.id ?? ""), type: String(o.type ?? ""), name: o.name ? String(o.name) : null, summary: o.summary ? String(o.summary) : null,
     }));
     const prev = this.state.sectors[k];
-    this.state.sectors[k] = { sector: obs.relativeCoordinates, scannedAt: nowIso, knowledgeLevel: obs.knowledgeLevel, objects, error: null };
+    const resources: Record<string, number> = {};
+    for (const t of mineableTargets(obs))
+      for (const r of t.resourceTypes ?? []) resources[r] = (resources[r] ?? 0) + Number((t.resourceAmounts as Record<string, number> | undefined)?.[r] ?? 0);
+    this.state.sectors[k] = {
+      sector: obs.relativeCoordinates, scannedAt: nowIso, knowledgeLevel: obs.knowledgeLevel, objects, error: null,
+      resources, scutNetworkIds: (obs.scutNetworks ?? []).map((n) => n.id), coverage: obs.scutCoverageStatus ?? null,
+    };
 
     // Only detailed scans list objects reliably; don't mark things gone on a weak scan.
     const detailed = obs.knowledgeLevel === "detailed";

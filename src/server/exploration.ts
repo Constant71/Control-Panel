@@ -62,6 +62,8 @@ export interface ExploreInput {
   inspected: Set<string>;
   /** Moves Merchant confirmed, by probe id: target key and when. */
   approved?: Record<string, { key: string; at: string }>;
+  /** Probes the Stations feature controls (stations and their groups): never explored. */
+  skip?: Set<number>;
   now: number;
 }
 
@@ -76,7 +78,7 @@ export interface ExploreResult {
 type Obj = Record<string, unknown>;
 
 export function planExploration(input: ExploreInput): ExploreResult {
-  const { snapshot, settings, scans, settledSince, costPerSector, inspected, now, approved = {} } = input;
+  const { snapshot, settings, scans, settledSince, costPerSector, inspected, now, approved = {}, skip = new Set() } = input;
   const res: ExploreResult = { moves: [], suggestions: [], departing: new Set(), status: [] };
   const visited = new Set(snapshot.visitedSectors.map((s) => vkey(s.relativeCoordinates)));
   const def = snapshot.probes.find((v) => v.summary.id === snapshot.defaultProbeId) ?? null;
@@ -98,6 +100,11 @@ export function planExploration(input: ExploreInput): ExploreResult {
     const st: ExploreStatus = { probeId: v.summary.id, probeName: v.summary.name, state: "waiting", text: "", candidates: [] };
     res.status.push(st);
     const say = (state: ExploreStatus["state"], text: string) => Object.assign(st, { state, text });
+    // A station never moves on its own, and its group's moves belong to station dispatch.
+    if (cfg.role === "Station" || skip.has(v.summary.id)) {
+      say("blocked", cfg.role === "Station" ? "Stations never move on their own (Explore is ignored)." : "Part of a station group: station dispatch moves it, not exploration.");
+      continue;
+    }
 
     if (!v.summary.isReachable || !isFullProbe(v.detail)) { say("blocked", "Out of command range, so the panel can't move it."); continue; }
     const p = v.detail;
@@ -240,10 +247,10 @@ export function scoreTarget(target: Vec, scan: Schemas["SectorObservation"] | un
   return { target, score: +score.toFixed(2), notes, dangers, safe: dangers.length === 0 };
 }
 
-export function exploringProbes(snapshot: Snapshot, settings: AutomationSettings): ProbeView[] {
-  // A station never moves on its own (Stations design): it is skipped even with Explore on.
+export function exploringProbes(snapshot: Snapshot, settings: AutomationSettings, skip: Set<number> = new Set()): ProbeView[] {
+  // A station never moves on its own (Stations design): it is skipped even with Explore on, as is its group.
   return snapshot.probes.filter((v) => {
     const cfg = settingsFor(settings, v.summary.id);
-    return cfg.explore && cfg.role !== "Station" && v.summary.isReachable && isFullProbe(v.detail);
+    return cfg.explore && cfg.role !== "Station" && !skip.has(v.summary.id) && v.summary.isReachable && isFullProbe(v.detail);
   });
 }

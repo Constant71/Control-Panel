@@ -248,6 +248,13 @@ export class Automation extends EventEmitter {
   private readonly store: JsonStore<State>;
   lastPlan: AutomationAction[] = [];
   renames: PlannedRename[] = [];
+  /** Learned deuterium per sector of distance, by probe model. */
+  get costPerSector(): Record<string, number> {
+    return this.state.costPerSector;
+  }
+
+  /** Set by Stations each poll: probes exploration must leave alone, and probes whose Mannies station trips direct. */
+  stationHold: { noExplore: Set<number>; noMining: Set<number> } = { noExplore: new Set(), noMining: new Set() };
   crafting: GoalStatus[] = [];
   suggestions: Suggestion[] = [];
   improvements: Record<string, Schemas["ProbeImprovement"][]> = {};
@@ -375,7 +382,7 @@ export class Automation extends EventEmitter {
     this.explore = this.planExplore(this.lastSnapshot);
     const r = planAll({
       snapshot: this.lastSnapshot, settings: this.state.settings, inspected: new Set(this.state.inspected), busy,
-      recipes: this.state.recipes, crafts: this.state.crafts, departing: this.explore.departing,
+      recipes: this.state.recipes, crafts: this.state.crafts, departing: new Set([...this.explore.departing, ...this.stationHold.noMining]),
     });
     this.lastPlan = r.actions;
     this.crafting = r.crafting;
@@ -392,7 +399,7 @@ export class Automation extends EventEmitter {
       scans: Object.fromEntries(Object.entries(this.scans).map(([k, v]) => [k, v.sector])),
       settledSince: Object.fromEntries(Object.entries(this.state.settled).map(([k, v]) => [k, v.since])),
       costPerSector: this.state.costPerSector, inspected: new Set(this.state.inspected), now: this.now(),
-      approved: this.state.approvedMoves,
+      approved: this.state.approvedMoves, skip: this.stationHold.noExplore,
     });
     this.exploration = r.status;
     return r;
@@ -421,7 +428,7 @@ export class Automation extends EventEmitter {
     const t = this.now();
     let budget = SCANS_PER_CYCLE;
     const visited = new Set(snapshot.visitedSectors.map((s) => vkey(s.relativeCoordinates)));
-    for (const v of exploringProbes(snapshot, this.state.settings)) {
+    for (const v of exploringProbes(snapshot, this.state.settings, this.stationHold.noExplore)) {
       const pos = v.detail?.sector?.relative;
       if (!pos) continue;
       for (const n of fccNeighbors(pos)) {
@@ -498,7 +505,7 @@ export class Automation extends EventEmitter {
     const busy = recentlyOrdered(t);
     const all = planAll({
       snapshot, settings: s, inspected: new Set(this.state.inspected), busy, recipes: this.state.recipes, crafts: this.state.crafts,
-      departing: this.explore.departing,
+      departing: new Set([...this.explore.departing, ...this.stationHold.noMining]),
     });
     this.lastPlan = all.actions;
     this.crafting = all.crafting;
