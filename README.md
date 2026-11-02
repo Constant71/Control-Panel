@@ -305,6 +305,13 @@ A station never moves on its own. When it is in danger, its card on the Stations
 - **Stragglers:** an idle Hauler or Tanker left away from the station flies home once its Mannies are aboard and it has
   the fuel.
 
+## Debug export
+
+The System page has **Download debug export**: one JSON file (`GET /panel-api/diagnostics`) with the latest poll,
+recent API calls and errors, problems and fixes, automation, stations, discoveries and the console log. The API key,
+the panel password and anything shaped like a key or token are removed before it is sent. Send it when something
+looks wrong on the live game.
+
 ## Develop
 
 ```bash

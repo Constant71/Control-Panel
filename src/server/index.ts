@@ -15,6 +15,7 @@ import { CommsTracker } from "./comms.js";
 import { Stations, StationError } from "./stations.js";
 import type { MemberRole, StationConfig } from "../shared/stations.js";
 import { OPERATIONS, SPEC_VERSION } from "../shared/operations.gen.js";
+import { redact, diagnosticsFilename } from "./diagnostics.js";
 import type { AutomationSettings } from "../shared/automation.js";
 import type { AutoFixMode } from "../shared/problems.js";
 import type { PanelOrder } from "../shared/activity.js";
@@ -248,6 +249,29 @@ app.get("/panel-api/discoveries", async () => ({ discoveries: discovery.discover
 app.post<{ Body: { keys?: string[] | "all" } }>("/panel-api/discoveries/read", async (req) => {
   await discovery.markRead(req.body?.keys ?? "all");
   return { ok: true };
+});
+
+// One-file debug export (System page). Everything the panel saw and did, with secrets removed.
+app.get("/panel-api/diagnostics", async (_req, reply) => {
+  const bundle = {
+    exportedAt: new Date().toISOString(),
+    specVersion: SPEC_VERSION,
+    gameBaseUrl: config.gameBaseUrl,
+    state: panelState(),
+    snapshot: poller.snapshot,
+    apiLog: game.log,
+    problems: { mode: fixer.mode, problems: fixer.problems, attempts: fixer.attempts, log: fixer.log.slice(-300) },
+    automation: {
+      settings: automation.settings, plan: automation.lastPlan, log: automation.log.slice(-300),
+      crafting: automation.crafting, suggestions: automation.suggestions, exploration: automation.exploration,
+    },
+    stations: { status: stations.status(), log: stations.log.slice(-200), trips: stations.trips, handoffs: stations.handoffs },
+    discoveries: { discoveries: discovery.discoveries(), scans: discovery.scans() },
+    manualLog: manual.log.slice(-200),
+  };
+  reply.header("Content-Disposition", `attachment; filename="${diagnosticsFilename()}"`);
+  reply.type("application/json");
+  return JSON.stringify(redact(bundle, [config.gameApiKey, config.panelPassword]), null, 1);
 });
 
 app.get("/panel-api/api-log", async () => ({ entries: game.log.slice().reverse() }));

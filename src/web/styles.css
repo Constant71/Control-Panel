@@ -9,6 +9,8 @@ a { color: var(--accent); text-decoration: none; }
 code { font-family: ui-monospace, SFMono-Regular, Menlo, monospace; font-size: 12px; }
 button { background: var(--panel2); color: var(--text); border: 1px solid var(--line); border-radius: 6px; padding: 6px 10px; font: inherit; cursor: pointer; }
 button:hover { border-color: var(--accent); }
+a.button { display: inline-block; background: var(--panel2); color: var(--text); border: 1px solid var(--line); border-radius: 6px; padding: 6px 10px; text-decoration: none; }
+a.button:hover { border-color: var(--accent); }
 .muted { color: var(--muted); }
 .tiny { font-size: 12px; }
 .pad { padding: 12px 16px 32px; }
