@@ -233,6 +233,15 @@ app.post<{ Body: { probeId?: number; stationId?: number | null; role?: MemberRol
   }));
 app.post<{ Body: { probeId?: number } }>("/panel-api/stations/make-default", async (req, reply) =>
   stationCall(reply, async () => stations.makeDefault(Number(req.body?.probeId))));
+app.post<{ Body: { probeId?: number; target?: { x: number; y: number; z: number } } }>("/panel-api/stations/flee", async (req, reply) =>
+  stationCall(reply, async () => {
+    const t = req.body?.target;
+    if (!t) throw new StationError(400, "Pick a destination.");
+    await stations.confirmFlee(Number(req.body?.probeId), { x: Number(t.x), y: Number(t.y), z: Number(t.z) });
+    return { ok: true, message: "Flee confirmed: Mannies outside in this sector are recalled first, then the station moves." };
+  }));
+app.post<{ Body: { probeId?: number } }>("/panel-api/stations/flee-cancel", async (req, reply) =>
+  stationCall(reply, async () => (await stations.cancelFlee(Number(req.body?.probeId)), { ok: true, message: "Flee cancelled." })));
 
 app.get("/panel-api/discoveries", async () => ({ discoveries: discovery.discoveries(), scans: discovery.scans() }));
 

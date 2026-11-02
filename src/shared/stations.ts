@@ -37,6 +37,8 @@ export interface StationConfig {
   tankerReservePercent: number;
   /** Probe yard (5d): which model's kit the station gathers. */
   yardModel: "generic" | "deuterium_tanker";
+  /** Flee card (5e) when integrity drops below this percent. */
+  fleeIntegrityPercent: number;
   /** Dispatch (5c): send idle Haulers to mine what the station is short of, inside its SCUT network. */
   dispatch: boolean;
   /** A trip heads home after this long at the mining sector, full or not. */
@@ -46,7 +48,7 @@ export interface StationConfig {
   createdAt: string;
 }
 
-export type TripState = "outbound" | "mining" | "returning" | "handing_over" | "done" | "failed";
+export type TripState = "outbound" | "mining" | "refuelling" | "returning" | "handing_over" | "done" | "failed";
 
 export interface Trip {
   id: string;
@@ -62,6 +64,11 @@ export interface Trip {
   /** When the hauler reached the mining sector. */
   arrivedAt: string | null;
   note: string | null;
+  /** "rescue": a Tanker flying out to refuel a stranded Hauler (5e). */
+  kind?: "haul" | "rescue";
+  rescue?: { haulerId: number; amount: number; sentAt: string | null };
+  /** Set while a Hauler lacks the fuel to fly home. */
+  needsFuel?: boolean;
 }
 
 export interface StorageRules {
@@ -73,10 +80,12 @@ export interface StorageRules {
 export type StationOpPlan =
   | { kind: "rules"; probeId: number; containerId: string; rules: StorageRules }
   | { kind: "detach"; probeId: number; mannyId: string; containerId: string; toProbeId: number; purpose: "full" | "empty" }
-  | { kind: "refuel"; probeId: number; mannyId: string; targetProbeId: number; amount: number }
+  | { kind: "refuel"; probeId: number; mannyId: string; targetProbeId: number; amount: number; tripId?: string }
   | { kind: "recover"; probeId: number; mannyId: string; objectId: string; handoffId: string }
   | { kind: "manny_move"; probeId: number; mannyId: string; targetProbeId: number }
-  | { kind: "trip_move"; probeId: number; target: { x: number; y: number; z: number }; tripId: string; leg: "out" | "home"; resource: string; reason: string }
+  | { kind: "trip_move"; probeId: number; target: { x: number; y: number; z: number }; tripId: string; leg: "out" | "home"; resource: string; reason: string; rescue?: { haulerId: number; amount: number }; ret?: boolean }
+  | { kind: "recall"; probeId: number; mannyId: string }
+  | { kind: "flee_move"; probeId: number; target: { x: number; y: number; z: number } }
   | { kind: "trip_mine"; probeId: number; mannyId: string; objectId: string; resource: string; targetAmount: number; tripId: string };
 
 export interface StationOp {
@@ -181,6 +190,24 @@ export interface StationStatus {
   dispatchNotes: string[];
   /** Crafting goals the production mode adds to the station's queue. */
   production: ProductionGoal[];
+  /** Danger: a flee card waiting for Merchant, or a confirmed flee under way (5e). */
+  flee: FleeCard | null;
+}
+
+export interface FleeOption {
+  target: { x: number; y: number; z: number };
+  notes: string[];
+  inNetwork: boolean;
+}
+
+export interface FleeCard {
+  stationId: number;
+  reasons: string[];
+  options: FleeOption[];
+  fuelCost: number | null;
+  risks: string[];
+  /** Set once Merchant confirmed. */
+  approved: { target: { x: number; y: number; z: number }; at: string; state: string } | null;
 }
 
 export interface ProductionGoal {
@@ -207,6 +234,7 @@ export const DEFAULT_STATION: Omit<StationConfig, "probeId" | "createdAt"> = {
   ferryFuelTargetPercent: 90,
   tankerReservePercent: 30,
   yardModel: "generic",
+  fleeIntegrityPercent: 50,
   dispatch: true,
   maxTripHours: 6,
   tripFuelMarginPercent: 20,

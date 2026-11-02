@@ -283,7 +283,27 @@ already has an item, your goal is used instead of the station's.
 - The spec's `MannyCraftRequest` only takes `recipe`, so the panel doesn't rely on one Manny crafting a whole chain
   ("whole build"). It crafts parts first instead.
 
-Flee cards and station stuck fixes follow in 5e.
+## Step 5e: Flee cards and stuck fixes
+
+A station never moves on its own. When it is in danger, its card on the Stations page shows a red flee card.
+
+- **Triggers (spec only):** an unresolved alert with phase `weapon_targeted` from the last 24 hours, a missile in the
+  sector with `targetsCurrentProbe`, integrity below the station's flee floor (default 50%, editable), or unresolved
+  damage warnings.
+- **Options:** up to 4 neighbouring sectors. Sectors with a known hazard are left out. Sectors on the station's SCUT
+  network, and sectors visited before, come first.
+- **Risks shown before you confirm:** 5 or more additional containers (break-off chance), Mannies working in another
+  sector (a remote recall would strand them, so they are left), Mannies outside in this sector (recalled first),
+  being the default probe, and fuel for the jump.
+- **After you confirm:** local Mannies are recalled (`POST .../mannies/{id}/recall`), then `POST /api/probe/{id}/move`
+  goes out once all of them are aboard. While fleeing, the station starts no new trips, hand-offs or refuels.
+  Haulers already out come home to the new sector. You can cancel until the move is sent; an unstarted flee expires
+  after 6 hours.
+- **Stranded Hauler:** if a Hauler on a trip lacks the fuel to fly home, a free docked Tanker of the same station flies
+  out and sends fuel with `transfer-deuterium-to-probe`, keeping its own reserve. It only goes when the move cost is
+  known.
+- **Stragglers:** an idle Hauler or Tanker left away from the station flies home once its Mannies are aboard and it has
+  the fuel.
 
 ## Develop
 
@@ -304,4 +324,4 @@ The mock (`mock/`) is typed against the generated schema too, so it can't drift 
 3. 24/7 automation: 3a mining, construct inspection, naming; 3b crafting and probe-build suggestions; 3c exploration. Rules (mining, crafting, repair, deuterium, storage, exploration within SCUT range, inspecting dormant constructs, probe-build suggestions, automatic naming)
 4. Remaining endpoints as manual controls, plus messaging, logbook and forum
 5. Stations (from the Stations design): 5a designation, groups and stock targets; 5b container hand-offs and
-   refuelling while docked; 5c dispatch loop and hauler trips; 5d production modes (this); 5e flee cards and stuck fixes
+   refuelling while docked; 5c dispatch loop and hauler trips; 5d production modes; 5e flee cards and stuck fixes (this)

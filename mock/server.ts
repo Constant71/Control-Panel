@@ -126,7 +126,16 @@ export function startMock(port = 0, opts: MockOpts = {}) {
         const pg = world.logbook.find((x) => x.id === Number(lp[1]) && x.probeId === id);
         return pg ? json(200, { page: pg }, h) : json(404, { error: { code: "not_found", message: "No such page" } }, h);
       }
-      if (rest === "/alerts") return json(200, { alerts: [], rules: { storageContainerBreak: {} } }, h);
+      if (rest === "/alerts") {
+        // MOCK_DANGER=1 puts a weapon_targeted alert on Prime, to preview the Stations flee card.
+        const now = new Date().toISOString();
+        const danger = process.env.MOCK_DANGER && id === 1
+          ? [{ id: 99, type: "others_weapon", status: "unread", message: "A missile launched from a neighbouring sector has selected Prime as its target.",
+              illustrationImageUrl: null, phase: "weapon_targeted", scheduledAt: now, sector: { relative: { x: 0, y: 0, z: 0 } },
+              createdAt: now, updatedAt: now, readAt: null, resolvedAt: null }]
+          : [];
+        return json(200, { alerts: danger, rules: { storageContainerBreak: {} } }, h);
+      }
       if (rest === "/damage-warnings") return json(200, { damageWarnings: world.alerts[id] ?? [] }, h);
       if (rest === "/sector") {
         if (probe.status === "cruising") return json(409, { error: { code: "sensors_unavailable", message: "Sector scan unavailable while moving." } }, h);

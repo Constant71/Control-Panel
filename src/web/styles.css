@@ -188,3 +188,5 @@ tr.note-row td { border-top: none; padding-top: 0; }
 .member .row.wrap { gap: 8px; }
 .station-mark { fill: none; stroke: var(--warn, #e0a030); stroke-width: 2; }
 .station-label { fill: var(--warn, #e0a030); font-size: 10px; font-weight: 700; }
+.flee { border: 1px solid var(--crit); border-radius: 6px; padding: 8px; margin: 8px 0; background: color-mix(in srgb, var(--crit) 10%, transparent); }
+.flee .members { margin-top: 6px; }

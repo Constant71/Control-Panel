@@ -174,3 +174,86 @@ test("Stations sends the trip move and records the trip; the regular automation 
     await mock.close();
   }
 });
+
+/** Adds Tanker (id 4, a copy of Scout) docked at the station. */
+function withTanker(snap: Snapshot): Snapshot {
+  const t = structuredClone(snap.probes[1]);
+  t.summary = { ...t.summary, id: 4, name: "Tanker", isDefault: false };
+  const T = t.detail as Probe;
+  T.id = 4;
+  T.name = "Tanker";
+  T.sector = { relative: { x: 0, y: 0, z: 0 } };
+  T.fuel.deuterium = 100;
+  t.mannies = t.mannies?.map((m, i) => ({ ...m, id: `tanker-manny-${i}` })) ?? null;
+  snap.probes.push(t);
+  return snap;
+}
+const tv = (snap: Snapshot) => snap.probes.find((v) => v.summary.id === 4)!;
+const tankerData = (): StationsData => ({
+  stations: [cfg()], members: { "2": { stationId: 1, role: "Hauler", joinedAt: "" }, "4": { stationId: 1, role: "Tanker", joinedAt: "" } }, log: [],
+});
+
+test("a Hauler stranded without fuel gets the docked Tanker; the Tanker refuels it and both come home", async () => {
+  const { mock, poller } = await setup();
+  try {
+    const now = Date.now();
+    const iso = new Date(now - 60_000).toISOString();
+    const snap = withTanker(world(poller.snapshot));
+    const scout = snap.probes[1].detail as Probe;
+    scout.sector = { relative: { x: 1, y: 1, z: 0 } };
+    scout.fuel.deuterium = 2;
+    const trip: Trip = {
+      id: "t1", stationId: 1, haulerId: 2, target: { x: 1, y: 1, z: 0 }, home: { x: 0, y: 0, z: 0 }, resource: "ice", reason: "ice short",
+      state: "mining", startedAt: new Date(now - 7 * 3_600_000).toISOString(), updatedAt: iso, arrivedAt: iso, note: null,
+    };
+    let r = plan(snap, tankerData(), [trip], { generic: 10 }, now);
+    assert.equal(trip.needsFuel, true, "out of time, but not enough fuel to fly home");
+    assert.ok(!r.ops.some((o) => o.plan.kind === "trip_move" && o.plan.probeId === 2));
+    r = plan(snap, tankerData(), [trip], { generic: 10 }, now);
+    const rescue = r.ops.find((o) => o.plan.kind === "trip_move" && o.plan.probeId === 4);
+    assert.ok(rescue && rescue.plan.kind === "trip_move" && rescue.plan.rescue?.haulerId === 2);
+    assert.deepEqual(rescue.plan.target, { x: 1, y: 1, z: 0 });
+
+    // Without a known move cost the panel won't risk the Tanker.
+    r = plan(snap, tankerData(), [trip], {}, now);
+    assert.ok(!r.ops.some((o) => o.plan.kind === "trip_move" && o.plan.probeId === 4));
+
+    // The rescue trip: Tanker arrives, sends fuel through a Manny, flies home.
+    const tanker = tv(snap).detail as Probe;
+    tanker.sector = { relative: { x: 1, y: 1, z: 0 } };
+    const rt: Trip = {
+      id: "r1", stationId: 1, haulerId: 4, target: { x: 1, y: 1, z: 0 }, home: { x: 0, y: 0, z: 0 }, resource: "deuterium", reason: "rescue Scout",
+      state: "outbound", startedAt: iso, updatedAt: iso, arrivedAt: null, note: null, kind: "rescue", rescue: { haulerId: 2, amount: 20, sentAt: null },
+    };
+    r = plan(snap, tankerData(), [trip, rt], { generic: 10 }, now);
+    assert.equal(rt.state, "refuelling");
+    r = plan(snap, tankerData(), [trip, rt], { generic: 10 }, now);
+    const refuel = r.ops.find((o) => o.plan.kind === "refuel");
+    assert.ok(refuel && refuel.plan.kind === "refuel" && refuel.plan.probeId === 4 && refuel.plan.targetProbeId === 2 && refuel.plan.amount === 20);
+    rt.rescue!.sentAt = new Date(now - 7 * 60_000).toISOString();
+    r = plan(snap, tankerData(), [trip, rt], { generic: 10 }, now);
+    assert.ok(r.ops.some((o) => o.plan.kind === "trip_move" && o.plan.probeId === 4 && o.plan.leg === "home"));
+  } finally {
+    await mock.close();
+  }
+});
+
+test("an idle Hauler or Tanker away from the station is sent home, but not while its Mannies are out", async () => {
+  const { mock, poller } = await setup();
+  try {
+    const snap = withTanker(world(poller.snapshot));
+    (tv(snap).detail as Probe).sector = { relative: { x: 1, y: 1, z: 0 } };
+    tv(snap).mannies![0] = { ...tv(snap).mannies![0], currentTask: "mining", location: { type: "sector", sector: { relative: { x: 1, y: 1, z: 0 } } } };
+    let r = plan(snap, tankerData(), [], { generic: 10 });
+    assert.ok(!r.ops.some((o) => o.plan.kind === "trip_move" && o.plan.probeId === 4));
+    assert.match(r.notes[1].join(" "), /Tanker is away from the station with nothing to do/);
+
+    tv(snap).mannies![0] = { ...tv(snap).mannies![0], currentTask: null, location: { type: "probe", sector: null } };
+    r = plan(snap, tankerData(), [], { generic: 10 });
+    const home = r.ops.find((o) => o.plan.kind === "trip_move" && o.plan.probeId === 4);
+    assert.ok(home && home.plan.kind === "trip_move" && home.plan.ret && home.plan.leg === "home");
+    assert.deepEqual(home.plan.target, { x: 0, y: 0, z: 0 });
+  } finally {
+    await mock.close();
+  }
+});

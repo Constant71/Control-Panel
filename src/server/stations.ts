@@ -18,9 +18,10 @@ import { detachedContainersIn, planService, sanitizeService, trackHandoffs } fro
 import { ACTIVE, planDispatch } from "./dispatch.js";
 import type { SectorKnowledge } from "./discovery.js";
 import { productionGoals, toCraftGoals } from "./production.js";
+import { fleeCard, type FleeApproval } from "./flee.js";
 import type { CraftGoal } from "../shared/crafting.js";
 import {
-  DEFAULT_STATION, MEMBER_ROLES, type Check, type Handoff, type StationOp, type Trip, type MemberRole, type MemberStatus, type StationConfig, type StationLogEntry,
+  DEFAULT_STATION, MEMBER_ROLES, type Check, type FleeCard, type Handoff, type StationOp, type Trip, type MemberRole, type MemberStatus, type StationConfig, type StationLogEntry,
   type StationMode, type StationStatus, type StationsData, type StockTarget, type TargetStatus,
 } from "../shared/stations.js";
 
@@ -34,6 +35,8 @@ interface StoredData extends StationsData {
   knownProbes: number[] | null;
   handoffs: Handoff[];
   trips: Trip[];
+  /** Flees Merchant confirmed, by station id. */
+  flee: Record<string, FleeApproval>;
   /** Op id -> retry-after ISO, after a refused call. */
   failures: Record<string, string>;
 }
@@ -43,7 +46,7 @@ const FAIL_BACKOFF_MS = 10 * 60_000;
 /** A deuterium transfer takes five minutes (spec); don't send another to the same pair meanwhile. */
 const REFUEL_GAP_MS = 7 * 60_000; // also spaces Manny moves between a pair
 const RULES_GAP_MS = 30 * 60_000;
-const emptyData = (): StoredData => ({ stations: [], members: {}, log: [], knownProbes: null, handoffs: [], trips: [], failures: {} });
+const emptyData = (): StoredData => ({ stations: [], members: {}, log: [], knownProbes: null, handoffs: [], trips: [], flee: {}, failures: {} });
 
 export class StationError extends Error {
   constructor(readonly status: number, message: string) {
@@ -203,6 +206,7 @@ export function stationStatus(
       trips: trips.filter((x) => x.stationId === cfg.probeId).slice(-20).reverse(),
       dispatchNotes: dispatchNotes[cfg.probeId] ?? [],
       production: productionGoals(cfg, data, snapshot).map((g) => ({ ...g, have: stock ? (stock.get(g.item) ?? 0) : null })),
+      flee: null as FleeCard | null,
     };
   });
 }
@@ -231,6 +235,7 @@ export class Stations extends EventEmitter {
   /** What docked service planned on the last poll. */
   next: StationOp[] = [];
   dispatchNotes: Record<number, string[]> = {};
+  fleeCards: Record<number, FleeCard> = {};
   private readonly refuels = new Map<string, number>();
   /** Rules updates sent recently: if the next poll still shows old rules, wait before sending again. */
   private readonly rulesSent = new Map<string, number>();
@@ -271,7 +276,12 @@ export class Stations extends EventEmitter {
   }
 
   status(): StationStatus[] {
-    return stationStatus(this.deps.snapshot(), this.data, this.next, this.data.handoffs, this.data.trips, this.dispatchNotes);
+    return stationStatus(this.deps.snapshot(), this.data, this.next, this.data.handoffs, this.data.trips, this.dispatchNotes).map((st) => {
+      const card = this.fleeCards[st.probeId] ?? null;
+      if (card && !card.approved) st.checks.unshift({ ok: false, text: `Danger: ${card.reasons.join(" ")} Decide on the flee card.` });
+      if (card?.approved) st.checks.unshift({ ok: false, text: `Fleeing to (${card.approved.target.x}, ${card.approved.target.y}, ${card.approved.target.z}): ${card.approved.state}.` });
+      return { ...st, flee: card };
+    });
   }
 
   private now(): number {
@@ -328,6 +338,7 @@ export class Stations extends EventEmitter {
     if (patch.fuelFloorPercent !== undefined) cfg.fuelFloorPercent = clamp(patch.fuelFloorPercent, 0, 100, cfg.fuelFloorPercent);
     if (patch.mannyTarget !== undefined) cfg.mannyTarget = clamp(patch.mannyTarget, 0, 500, cfg.mannyTarget);
     if (typeof patch.dispatch === "boolean") cfg.dispatch = patch.dispatch;
+    if (patch.fleeIntegrityPercent !== undefined) cfg.fleeIntegrityPercent = clamp(patch.fleeIntegrityPercent, 0, 100, cfg.fleeIntegrityPercent);
     if (patch.yardModel === "generic" || patch.yardModel === "deuterium_tanker") cfg.yardModel = patch.yardModel;
     if (patch.maxTripHours !== undefined) cfg.maxTripHours = clamp(patch.maxTripHours, 1, 72, cfg.maxTripHours);
     if (patch.tripFuelMarginPercent !== undefined) cfg.tripFuelMarginPercent = clamp(patch.tripFuelMarginPercent, 0, 90, cfg.tripFuelMarginPercent);
@@ -389,6 +400,25 @@ export class Stations extends EventEmitter {
     }
   }
 
+  /** Merchant confirmed a flee card: recall local Mannies, then move (run from onSnapshot). */
+  async confirmFlee(stationId: number, target: { x: number; y: number; z: number }): Promise<void> {
+    const card = this.fleeCards[stationId];
+    if (!card) throw new StationError(409, "There is no flee card for this station right now.");
+    if (!card.options.some((o) => o.target.x === target?.x && o.target.y === target?.y && o.target.z === target?.z))
+      throw new StationError(400, "Pick one of the destinations on the card.");
+    this.data.flee[String(stationId)] = { target, at: new Date(this.now()).toISOString(), state: "recalling" };
+    this.addLog({ stationId, probeId: stationId, label: `You confirmed a flee to (${target.x}, ${target.y}, ${target.z})`, endpoint: null, ok: true, message: card.reasons.join(" ") });
+    await this.save();
+    this.deps.onActed?.();
+  }
+
+  async cancelFlee(stationId: number): Promise<void> {
+    if (!this.data.flee[String(stationId)]) return;
+    delete this.data.flee[String(stationId)];
+    this.addLog({ stationId, probeId: stationId, label: "Flee cancelled", endpoint: null, ok: true, message: null });
+    await this.save();
+  }
+
   /** Housekeeping on every poll: a probe that appears in a station's sector joins its group with no role. */
   async onSnapshot(snapshot: Snapshot): Promise<void> {
     const ids = snapshot.probes.map((v) => v.summary.id);
@@ -419,6 +449,48 @@ export class Stations extends EventEmitter {
     if (this.data.handoffs.length > 200) this.data.handoffs.splice(0, this.data.handoffs.length - 200);
     for (const [k, at] of this.refuels) if (t - at > REFUEL_GAP_MS) this.refuels.delete(k);
     const busy = recentlyOrdered(t);
+    // Danger first: flee cards and confirmed flees.
+    const fleeOps: StationOp[] = [];
+    this.fleeCards = {};
+    for (const cfg of this.data.stations) {
+      const key = String(cfg.probeId);
+      const v = snapshot.probes.find((x) => x.summary.id === cfg.probeId);
+      let ap: FleeApproval | null = this.data.flee[key] ?? null;
+      if (ap && v && isFullProbe(v.detail)) {
+        const pos = sectorOf(v);
+        const movingNow = !!v.detail.movement && !["arrived", "failed", "destroyed"].includes(v.detail.movement.status);
+        if (movingNow && ap.state !== "moving") { ap.state = "moving"; changed = true; }
+        if (!movingNow && same(pos, ap.target)) {
+          delete this.data.flee[key];
+          for (const tr of this.data.trips) if (tr.stationId === cfg.probeId && ACTIVE.includes(tr.state)) tr.home = ap.target;
+          this.addLog({ stationId: cfg.probeId, probeId: cfg.probeId, label: `Fled to (${ap.target.x}, ${ap.target.y}, ${ap.target.z})`, endpoint: null, ok: true, message: "Trips now come home here." });
+          ap = null;
+          changed = true;
+        } else if (!movingNow && t - new Date(ap.at).getTime() > 6 * 3_600_000) {
+          delete this.data.flee[key];
+          this.addLog({ stationId: cfg.probeId, probeId: cfg.probeId, label: "Flee dropped: it didn't start within 6 hours", endpoint: null, ok: false, message: null });
+          ap = null;
+          changed = true;
+        } else if (!movingNow && ap.state === "recalling") {
+          const local = (v.mannies ?? []).filter((m) => m.location.type === "sector" && same(m.location.sector?.relative ?? null, pos));
+          for (const m of local.filter((x) => x.currentTask !== "returning" && !busy.has(x.id)))
+            fleeOps.push({
+              id: `flee:recall:${m.id}`, stationId: cfg.probeId, label: `${m.name} is recalled before the flee`, why: "You confirmed the flee; Mannies outside come aboard first.",
+              endpoint: `POST /api/probe/${cfg.probeId}/mannies/${m.id}/recall`, plan: { kind: "recall", probeId: cfg.probeId, mannyId: m.id },
+            });
+          if (!local.length)
+            fleeOps.push({
+              id: `flee:move:${cfg.probeId}`, stationId: cfg.probeId, label: `${v.summary.name} flees to (${ap.target.x}, ${ap.target.y}, ${ap.target.z})`,
+              why: "You confirmed the flee and every local Manny is aboard.", endpoint: `POST /api/probe/${cfg.probeId}/move`,
+              plan: { kind: "flee_move", probeId: cfg.probeId, target: ap.target },
+            });
+        }
+      }
+      if (v) {
+        const card = fleeCard(v, cfg, this.deps.sectors?.() ?? [], this.deps.costPerSector?.() ?? {}, ap, snapshot, t);
+        if (card) this.fleeCards[cfg.probeId] = card;
+      }
+    }
     // Trips first: they decide which Haulers leave, and their Mannies.
     const dispatch = planDispatch({
       snapshot, data: this.data, status: stationStatus(snapshot, this.data), trips: this.data.trips, handoffs: this.data.handoffs,
@@ -432,7 +504,8 @@ export class Stations extends EventEmitter {
     if (this.data.trips.length > 200) this.data.trips.splice(0, this.data.trips.length - 200);
     this.dispatchNotes = dispatch.notes;
     const grouped = new Set<number>([...this.data.stations.map((x) => x.probeId), ...Object.keys(this.data.members).map(Number)]);
-    this.deps.hold?.(grouped, dispatch.noMining);
+    const fleeing = new Set(Object.keys(this.data.flee).map(Number));
+    this.deps.hold?.(grouped, new Set([...dispatch.noMining, ...fleeing]));
     this.deps.goals?.(Object.fromEntries(this.data.stations.map((c) => [String(c.probeId), toCraftGoals(c.probeId, productionGoals(c, this.data, snapshot))])));
     const away = new Set(this.data.trips.filter((x) => ACTIVE.includes(x.state) && x.state !== "handing_over").map((x) => x.haulerId));
     for (const o of dispatch.ops) if (o.plan.kind === "trip_move") away.add(o.plan.probeId); // leaving now: no new docked work
@@ -440,7 +513,9 @@ export class Stations extends EventEmitter {
       snapshot, data: this.data, handoffs: this.data.handoffs, busy, recentRefuels: new Set(this.refuels.keys()),
     }).filter((o) => !((o.plan.kind === "detach" || o.plan.kind === "refuel") &&
       (away.has(o.plan.probeId) || away.has(o.plan.kind === "detach" ? o.plan.toProbeId : o.plan.targetProbeId))));
-    this.next = [...dispatch.ops, ...service];
+    // A station that is fleeing starts nothing new: no trips out, no hand-offs, no refuels.
+    const calm = (o: StationOp) => !fleeing.has(o.stationId) || (o.plan.kind === "trip_move" && o.plan.leg === "home") || o.plan.kind === "trip_mine";
+    this.next = [...fleeOps, ...dispatch.ops.filter(calm), ...service.filter(calm)];
     const mode = this.deps.mode?.() ?? "auto";
     let acted = false;
     if (mode !== "off") {
@@ -511,16 +586,33 @@ export class Stations extends EventEmitter {
         case "trip_move": {
           unwrap(await c.POST("/api/probe/{probeId}/move", { params: { path: { probeId: plan.probeId } }, body: { target: plan.target } }));
           const now = new Date(t).toISOString();
-          if (plan.leg === "out") {
+          if (plan.ret) {
+            this.data.trips.push({
+              id: plan.tripId, stationId: op.stationId, haulerId: plan.probeId, target: plan.target, home: plan.target, resource: "", reason: plan.reason,
+              state: "returning", startedAt: now, updatedAt: now, arrivedAt: null, note: "Flying home to the station.", kind: "haul",
+            });
+          } else if (plan.leg === "out") {
             const home = sectorOf(snapshot.probes.find((v) => v.summary.id === plan.probeId)) ?? { x: 0, y: 0, z: 0 };
             this.data.trips.push({
               id: plan.tripId, stationId: op.stationId, haulerId: plan.probeId, target: plan.target, home, resource: plan.resource, reason: plan.reason,
               state: "outbound", startedAt: now, updatedAt: now, arrivedAt: null, note: "On the way.",
+              kind: plan.rescue ? "rescue" : "haul", rescue: plan.rescue ? { ...plan.rescue, sentAt: null } : undefined,
             });
           } else {
             const trip = this.data.trips.find((x) => x.id === plan.tripId);
             if (trip) Object.assign(trip, { state: "returning", updatedAt: now, note: "Flying home." });
           }
+          break;
+        }
+        case "recall":
+          unwrap(await c.POST("/api/probe/{probeId}/mannies/{mannyId}/recall", { params: { path: { probeId: plan.probeId, mannyId: plan.mannyId } } }));
+          break;
+        case "flee_move": {
+          unwrap(await c.POST("/api/probe/{probeId}/move", { params: { path: { probeId: plan.probeId } }, body: { target: plan.target } }));
+          const ap = this.data.flee[String(plan.probeId)];
+          if (ap) ap.state = "moving";
+          const shown = this.fleeCards[plan.probeId]?.approved;
+          if (shown) shown.state = "moving";
           break;
         }
         case "manny_move":
@@ -540,6 +632,10 @@ export class Stations extends EventEmitter {
             params: { path: { probeId: plan.probeId, mannyId: plan.mannyId } }, body: { targetProbeId: plan.targetProbeId, amount: plan.amount },
           }));
           this.refuels.set(`${plan.probeId}:${plan.targetProbeId}`, t);
+          if (plan.tripId) {
+            const trip = this.data.trips.find((x) => x.id === plan.tripId);
+            if (trip?.rescue) trip.rescue.sentAt = new Date(t).toISOString();
+          }
           break;
       }
       if ("mannyId" in plan) markOrdered(plan.mannyId, t);

@@ -32,7 +32,16 @@ const UNKNOWN_COST_MIN_FUEL = 80;
 const same = (a: Vec | null | undefined, b: Vec | null | undefined) => !!a && !!b && a.x === b.x && a.y === b.y && a.z === b.z;
 const vstr = (v: Vec) => `(${v.x}, ${v.y}, ${v.z})`;
 const maxFuel = (p: Probe) => p.fuel.maxDeuterium ?? (p.model === "deuterium_tanker" ? 400 : 100);
-export const ACTIVE: Trip["state"][] = ["outbound", "mining", "returning", "handing_over"];
+export const ACTIVE: Trip["state"][] = ["outbound", "mining", "refuelling", "returning", "handing_over"];
+
+/** Deuterium a probe lacks to fly from `from` to `to` (0 when it has enough), keeping a 10% cushion. */
+export function fuelShortfall(p: Probe, from: Vec, to: Vec, costPerSector: Record<string, number>): number {
+  const max = maxFuel(p);
+  const per = costPerSector[p.model] ?? null;
+  if (per === null) return p.fuel.deuterium < 0.1 * max ? Math.ceil(0.3 * max - p.fuel.deuterium) : 0;
+  const need = fccDistance(from, to) * per;
+  return p.fuel.deuterium <= need + 1 ? Math.ceil(need + 0.1 * max - p.fuel.deuterium) : 0;
+}
 
 export interface DispatchInput {
   snapshot: Snapshot;
@@ -119,12 +128,48 @@ export function planDispatch(input: DispatchInput): DispatchResult {
     if (["dead", "disabled", "trapped_by_black_hole"].includes(H.status)) { set(t, "failed", `${name} is ${H.status}.`, false); continue; }
     if (H.movement?.status === "failed") { set(t, "failed", `${name}'s move failed.`, false); continue; }
     const op = (o: Omit<StationOp, "stationId">) => res.ops.push({ ...o, stationId: t.stationId });
-    const goHome = (why: string) =>
+    const goHome = (why: string) => {
+      const short = pos ? fuelShortfall(H, pos, t.home, costPerSector) : 0;
+      if (short > 0) {
+        if (!t.needsFuel) res.changes.push({ trip: t, note: `${name} lacks about ${short} deuterium to fly home.`, ok: false });
+        t.needsFuel = true;
+        t.note = `${name} doesn't have the fuel to fly home (short about ${short}). A Tanker is sent if one is free.`;
+        return;
+      }
+      t.needsFuel = false;
       op({
         id: `trip:${t.id}:home`, label: `${name} flies home to ${vstr(t.home)}`, why,
         endpoint: `POST /api/probe/${t.haulerId}/move`,
         plan: { kind: "trip_move", probeId: t.haulerId, target: t.home, tripId: t.id, leg: "home", resource: t.resource, reason: t.reason },
       });
+    };
+
+    if (t.state === "outbound" && t.kind === "rescue") {
+      if (!moving && same(pos, t.target)) { t.arrivedAt = iso; set(t, "refuelling", `Arrived at ${vstr(t.target)} to refuel the stranded Hauler.`); }
+      else if (!moving && same(pos, t.home) && now - new Date(t.startedAt).getTime() > 10 * 60_000) set(t, "failed", `${name} never left: the move was not carried out.`, false);
+      continue;
+    }
+
+    if (t.state === "refuelling" && t.rescue) {
+      const target = views.get(t.rescue.haulerId);
+      const here = !!target && isFullProbe(target.detail) && same(sectorOf(target), pos) && !isMoving(target.detail);
+      if (t.rescue.sentAt) {
+        if (now - new Date(t.rescue.sentAt).getTime() > 6 * 60_000 || !here) goHome("Fuel delivered (the transfer takes 5 minutes).");
+        continue;
+      }
+      if (!here) { goHome("The Hauler is no longer here."); continue; }
+      const m = idlePool(hv)();
+      if (!m) { t.note = "Waiting for an idle Manny to run the fuel transfer."; continue; }
+      const amount = Math.min(t.rescue.amount, Math.floor((H.fuel.deuterium - 1) * 100) / 100);
+      if (amount < 1) { goHome("Not enough fuel left to give."); continue; }
+      op({
+        id: `trip:${t.id}:refuel`, label: `${m.name} moves ${amount} deuterium from ${name} to ${target!.summary.name}`,
+        why: `${target!.summary.name} is stranded without the fuel to fly home.`,
+        endpoint: `POST /api/probe/${t.haulerId}/mannies/${m.id}/transfer-deuterium-to-probe`,
+        plan: { kind: "refuel", probeId: t.haulerId, mannyId: m.id, targetProbeId: t.rescue.haulerId, amount, tripId: t.id },
+      });
+      continue;
+    }
 
     if (t.state === "outbound") {
       if (!moving && same(pos, t.target)) { t.arrivedAt = iso; set(t, "mining", `Arrived at ${vstr(t.target)}. Mining ${t.resource.replace("_", " ")}.`); }
@@ -144,7 +189,7 @@ export function planDispatch(input: DispatchInput): DispatchResult {
       if (done) {
         const why = fill >= cfg.handoffMinFillPercent || hs.free - pending < 0.01 ? `hand-off containers are ${Math.round(fill)}% full`
           : !targets.length ? `nothing here holds ${t.resource.replace("_", " ")} any more` : `${cfg.maxTripHours} h at the mining sector`;
-        if (outside.length) { t.note = `Heading home soon (${why}). Waiting for ${outside.length} Manny${outside.length > 1 ? "s" : ""} to come back aboard first.`; continue; }
+        if (outside.length) { t.note = `Heading home soon (${why}). Waiting for ${outside.length} ${outside.length > 1 ? "Mannies" : "Manny"} to come back aboard first.`; continue; }
         goHome(`Trip done: ${why}. Every Manny is aboard.`);
         continue;
       }
@@ -174,7 +219,10 @@ export function planDispatch(input: DispatchInput): DispatchResult {
     }
 
     if (t.state === "returning") {
-      if (!moving && same(pos, t.home)) set(t, "handing_over", "Back at the station. Handing over full containers.");
+      if (!moving && same(pos, t.home)) {
+        if (t.kind === "rescue" || !t.resource) set(t, "done", "Back at the station.");
+        else set(t, "handing_over", "Back at the station. Handing over full containers.");
+      }
       else if (!moving && now - new Date(t.updatedAt).getTime() > 10 * 60_000) goHome("The move home hasn't started yet, so it is sent again.");
       continue;
     }
@@ -252,7 +300,7 @@ export function planDispatch(input: DispatchInput): DispatchResult {
         }
         const outside = hv.mannies.filter((m) => m.location.type === "sector" || m.currentTask !== null);
         res.noMining.add(H.id);
-        if (outside.length) { notes.push(`${name} leaves for ${label} at ${vstr(best.sector)} once its ${outside.length} busy Manny${outside.length > 1 ? "s are" : " is"} done and aboard.`); sent = true; break; }
+        if (outside.length) { notes.push(`${name} leaves for ${label} at ${vstr(best.sector)} once its ${outside.length} busy ${outside.length > 1 ? "Mannies are" : "Manny is"} done and aboard.`); sent = true; break; }
         const reason = `${label} ${+((need.have ?? 0).toFixed(3))} / ${need.min} ECE`;
         res.ops.push({
           id: `trip:new:${H.id}:${resource}`, stationId: cfg.probeId,
@@ -267,6 +315,60 @@ export function planDispatch(input: DispatchInput): DispatchResult {
       if (sent) break; // one new trip per station per cycle
     }
     if (sent) notes.unshift("Sending a Hauler.");
+  }
+
+  // 3. Rescues and stragglers, for every station (whatever its stock).
+  for (const cfg of data.stations) {
+    const notes = (res.notes[cfg.probeId] ??= []);
+    const sv = views.get(cfg.probeId);
+    if (!sv || !sv.summary.isReachable || !isFullProbe(sv.detail) || isMoving(sv.detail)) continue;
+    const home = sectorOf(sv)!;
+    const busyIds = new Set(trips.filter((t) => ACTIVE.includes(t.state)).map((t) => t.haulerId));
+    for (const o of res.ops) if (o.plan.kind === "trip_move") busyIds.add(o.plan.probeId);
+    const members = Object.entries(data.members).filter(([, m]) => m.stationId === cfg.probeId && m.role).map(([id, m]) => ({ id: Number(id), role: m.role!, v: views.get(Number(id)) }));
+
+    // A stranded Hauler gets a Tanker.
+    for (const t of trips.filter((x) => x.stationId === cfg.probeId && x.needsFuel && ACTIVE.includes(x.state))) {
+      if (trips.some((r) => r.kind === "rescue" && r.rescue?.haulerId === t.haulerId && ACTIVE.includes(r.state))) continue;
+      const hv = views.get(t.haulerId);
+      const where = hv ? sectorOf(hv) : null;
+      if (!hv || !isFullProbe(hv.detail) || !where) continue;
+      const short = fuelShortfall(hv.detail, where, t.home, costPerSector) || Math.ceil(0.3 * maxFuel(hv.detail));
+      const tanker = members.find((m) => m.role === "Tanker" && m.v && !busyIds.has(m.id) && m.v.summary.isReachable && isFullProbe(m.v.detail)
+        && !isMoving(m.v.detail) && same(sectorOf(m.v), home) && (m.v.mannies ?? []).every((x) => x.location.type === "probe"));
+      if (!tanker) { notes.push(`${hv.summary.name} is stranded at ${vstr(where)} without fuel to fly home, and no Tanker is docked and free. A Tanker in this group would be sent automatically.`); continue; }
+      const T = tanker.v!.detail as Probe;
+      const per = costPerSector[T.model] ?? null;
+      if (per === null) { notes.push(`${hv.summary.name} is stranded, but the Tanker's move cost isn't known yet, so the panel won't risk the trip. Send fuel from the Console.`); continue; }
+      const d = fccDistance(home, where);
+      const left = T.fuel.deuterium - 2 * d * per - short;
+      if (left < (cfg.tankerReservePercent / 100) * maxFuel(T)) { notes.push(`${tanker.v!.summary.name} can't rescue ${hv.summary.name}: the trip and ${short} deuterium would take it below its ${cfg.tankerReservePercent}% reserve.`); continue; }
+      busyIds.add(tanker.id);
+      res.noMining.add(tanker.id);
+      res.ops.push({
+        id: `trip:rescue:${t.haulerId}`, stationId: cfg.probeId, label: `${tanker.v!.summary.name} flies to ${vstr(where)} to refuel ${hv.summary.name}`,
+        why: `${hv.summary.name} lacks about ${short} deuterium to fly home. ${d} sector${d > 1 ? "s" : ""}, about ${2 * d * per} fuel there and back.`,
+        endpoint: `POST /api/probe/${tanker.id}/move`,
+        plan: { kind: "trip_move", probeId: tanker.id, target: where, tripId: `${tanker.id}@${now}`, leg: "out", resource: "deuterium", reason: `rescue ${hv.summary.name}`, rescue: { haulerId: t.haulerId, amount: short } },
+      });
+    }
+
+    // A group Hauler or Tanker left away from the station with nothing to do comes home.
+    for (const m of members) {
+      if (m.role === "Scout" || busyIds.has(m.id) || !m.v || !m.v.summary.isReachable || !isFullProbe(m.v.detail)) continue;
+      const P = m.v.detail;
+      const where = sectorOf(m.v);
+      if (!where || same(where, home) || isMoving(P) || ["dead", "disabled", "trapped_by_black_hole"].includes(P.status)) continue;
+      const out = (m.v.mannies ?? []).filter((x) => x.location.type === "sector" || x.currentTask !== null);
+      res.noMining.add(m.id);
+      if (out.length) { notes.push(`${m.v.summary.name} is away from the station with nothing to do; it flies home once its ${out.length} busy ${out.length > 1 ? "Mannies are" : "Manny is"} aboard.`); continue; }
+      if (fuelShortfall(P, where, home, costPerSector) > 0) { notes.push(`${m.v.summary.name} is away from the station without the fuel to fly home.`); continue; }
+      res.ops.push({
+        id: `trip:return:${m.id}`, stationId: cfg.probeId, label: `${m.v.summary.name} flies home to ${vstr(home)}`,
+        why: `It is a ${m.role} of this station, idle at ${vstr(where)}.`, endpoint: `POST /api/probe/${m.id}/move`,
+        plan: { kind: "trip_move", probeId: m.id, target: home, tripId: `${m.id}@${now}`, leg: "home", resource: "", reason: "return to the station", ret: true },
+      });
+    }
   }
   return res;
 }

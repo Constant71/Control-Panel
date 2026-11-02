@@ -4,7 +4,7 @@ import { ago } from "./format";
 import type { GoalStatus } from "../shared/crafting";
 import {
   MEMBER_ROLES, MODE_LABEL, type MemberRole, type MemberStatus, type StationConfig, type StationLogEntry, type StationMode,
-  type StationStatus, type StockResource, type StockTarget,
+  type FleeCard, type StationStatus, type StockResource, type StockTarget,
 } from "../shared/stations";
 
 interface StationsResponse {
@@ -27,7 +27,7 @@ const STEP_TEXT: Record<string, string> = {
   needs_manny: "waiting for a Manny", printer_busy: "printer busy", no_printer: "no printer", no_room: "no room", no_recipe: "no recipe",
 };
 const TRIP_TEXT: Record<string, string> = {
-  outbound: "flying out", mining: "mining", returning: "flying home", handing_over: "handing over", done: "done", failed: "failed",
+  outbound: "flying out", mining: "mining", refuelling: "refuelling", returning: "flying home", handing_over: "handing over", done: "done", failed: "failed",
 };
 
 const MODE_TEXT: Record<StationMode, string> = {
@@ -176,6 +176,8 @@ function StationCard({ s, free, recipes, run, goals }: {
       )}
       {s.production.length > 0 && <p className="muted tiny">Crafted through the Builds page's crafting queue (ingredients first). Probe builds stay confirm cards on the Builds page.</p>}
 
+      {s.flee && <FleeBox card={s.flee} name={s.name} run={run} />}
+
       <div className="tiny"><b>Checks</b>{bad > 0 && <span className="warn-text"> · {bad} to look at</span>}</div>
       <ul className="plain tiny">
         {s.checks.map((c, i) => <li key={i} className={c.ok ? "ok-text" : "warn-text"}>{c.ok ? "✓" : "!"} {c.text}</li>)}
@@ -234,7 +236,7 @@ function StationCard({ s, free, recipes, run, goals }: {
               <div className="row wrap">
                 <b>{nameOf(t.haulerId)}</b>
                 <span className={`tag ${t.state === "failed" ? "" : t.state === "done" ? "" : "auto"}`}>{TRIP_TEXT[t.state]}</span>
-                <span className="tiny muted">{nice(t.resource)} from ({t.target.x}, {t.target.y}, {t.target.z})</span>
+                <span className="tiny muted">{t.kind === "rescue" ? `fuel rescue for ${nameOf(t.rescue?.haulerId ?? 0)} at (${vec(t.target)})` : t.resource ? `${nice(t.resource)} from (${vec(t.target)})` : `back to the station at (${vec(t.target)})`}</span>
               </div>
               <div className={`tiny ${t.state === "failed" ? "warn-text" : "muted"}`}>{t.note ?? ""} <span className="muted">Why: {t.reason}.</span></div>
             </div>
@@ -345,6 +347,7 @@ function TargetEditor({ cfg, recipes, onSave }: { cfg: StationConfig; recipes: s
   const [reserve, setReserve] = useState(cfg.tankerReservePercent);
   const [tripHours, setTripHours] = useState(cfg.maxTripHours);
   const [tripMargin, setTripMargin] = useState(cfg.tripFuelMarginPercent);
+  const [fleeAt, setFleeAt] = useState(cfg.fleeIntegrityPercent);
   const [newKind, setNewKind] = useState<"resource" | "item">("resource");
   const [newName, setNewName] = useState("");
   const set = (i: number, min: number) => setTargets(targets.map((t, j) => (j === i ? { ...t, min } : t)));
@@ -373,6 +376,7 @@ function TargetEditor({ cfg, recipes, onSave }: { cfg: StationConfig; recipes: s
         }}>Add target</button>
       </div>
       <div className="row"><span className="grow">Station fuel floor (kept for one flee jump)</span><input type="number" min={0} max={100} value={fuel} onChange={(e) => setFuel(Number(e.target.value))} /><span className="unit">%</span></div>
+      <div className="row"><span className="grow">Offer a flee card below this integrity</span><input type="number" min={0} max={100} value={fleeAt} onChange={(e) => setFleeAt(Number(e.target.value))} /><span className="unit">%</span></div>
       <div className="row"><span className="grow">Mannies kept at the station</span><input type="number" min={0} value={mannies} onChange={(e) => setMannies(Number(e.target.value))} /><span className="unit" /></div>
       {MEMBER_ROLES.map((r) => (
         <div key={r} className="row"><span className="grow">Mannies per {r}</span>
@@ -387,8 +391,55 @@ function TargetEditor({ cfg, recipes, onSave }: { cfg: StationConfig; recipes: s
       <button onClick={() => onSave({
         targets, fuelFloorPercent: fuel, mannyTarget: mannies, mannyPerRole: perRole,
         handoffMinFillPercent: fill, containersPerHauler: boxes, ferryFuelTargetPercent: ferryFuel, tankerReservePercent: reserve,
-        maxTripHours: tripHours, tripFuelMarginPercent: tripMargin,
+        maxTripHours: tripHours, tripFuelMarginPercent: tripMargin, fleeIntegrityPercent: fleeAt,
       })}>Save settings</button>
+    </div>
+  );
+}
+
+function FleeBox({ card, name, run }: { card: FleeCard; name: string; run: (fn: () => Promise<unknown>, okText?: string) => void }) {
+  const a = card.approved;
+  return (
+    <div className="flee">
+      <div className="row wrap"><b className="warn-text">{a ? "Flee in progress" : "Danger: flee?"}</b>
+        <span className="tiny muted">The station never moves on its own. {a ? "" : "Pick a destination to confirm."}</span></div>
+      <ul className="plain tiny">{card.reasons.map((r, i) => <li key={i} className="warn-text">! {r}</li>)}</ul>
+      {a ? (
+        <>
+          <p className="tiny">
+            Heading to ({vec(a.target)}), confirmed {ago(a.at)}.{" "}
+            {a.state === "recalling" ? "Recalling Mannies outside in this sector; the move goes out once they are aboard." : "Move ordered."}
+          </p>
+          <button className="tiny" onClick={() => run(() => post("panel-api/stations/flee-cancel", { probeId: card.stationId }))}>Cancel flee</button>
+        </>
+      ) : (
+        <>
+          {card.risks.length > 0 && <ul className="plain tiny">{card.risks.map((r, i) => <li key={i}>⚠ {r}</li>)}</ul>}
+          <p className="tiny muted">Fuel for one jump: {card.fuelCost === null ? "not known yet" : `about ${card.fuelCost}`}.</p>
+          {card.options.length === 0 && <p className="tiny warn-text">No hazard-free neighbouring sector on record. Use the Probes page to move manually.</p>}
+          <div className="members">
+            {card.options.map((o) => (
+              <div key={vec(o.target)} className="member">
+                <div className="row wrap">
+                  <b>({vec(o.target)})</b>
+                  {o.inNetwork && <span className="tag auto">on the network</span>}
+                  <span className="spacer" />
+                  <button className="danger" onClick={() => {
+                    const text = [
+                      `Flee ${name} to (${vec(o.target)})?`, "",
+                      "Mannies outside in this sector are recalled first (their tasks are cancelled), then POST /api/probe/" + card.stationId + "/move is sent.",
+                      ...card.risks.map((r) => "• " + r),
+                    ].join("\n");
+                    if (!window.confirm(text)) return;
+                    run(() => post("panel-api/stations/flee", { probeId: card.stationId, target: o.target }));
+                  }}>Flee here</button>
+                </div>
+                <ul className="plain tiny muted">{o.notes.map((n, i) => <li key={i}>{n}</li>)}</ul>
+              </div>
+            ))}
+          </div>
+        </>
+      )}
     </div>
   );
 }
