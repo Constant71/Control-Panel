@@ -112,6 +112,34 @@ refresh, so fixes always get first pick of idle Mannies.
   refresh, and "Revert all names" restores the originals (saved in
   `/data/automation.json`).
 
+## Step 3b: Crafting queue and build suggestions (Builds page)
+
+- **Crafting queue**, per probe: ordered lines that each mean "keep at least N of
+  this item aboard". The recipe tree comes live from `GET /api/crafting-recipes`.
+  Every refresh, the panel does the following:
+  - It reserves what is aboard, starts every craft whose ingredients are present
+    (`POST .../mannies/{mannyId}/craft`, or `POST .../atomic-printer/craft` when a
+    printer is aboard, one print at a time), and works down into missing parts.
+  - Missing metals, ice, carbon and deuterium are added to the mining targets.
+  - Outputs only start if storage still has room for every Manny outside to
+    dock, and one Manny is always kept free for fixes.
+  - One-off lines leave the queue once they are reached.
+  - Crafting can be paused on its own. It follows the Automation mode (auto, dry
+    run or off).
+- **Build suggestions** never run on their own. Each card shows why, what it uses
+  up, what's missing, the risks, and the exact call. You confirm, and the panel
+  re-checks against the latest refresh before sending.
+  - *Assemble a probe* (`POST .../assemble-probe`): generic or deuterium tanker kit
+    (from the spec), two empty additional containers, an idle Manny, and a check
+    that storage still fits the Mannies outside afterwards. "Queue the missing
+    parts" adds the missing pieces to the crafting queue.
+  - *Install a probe improvement* (`POST .../improve-probe`): blueprints you know
+    that aren't installed on that probe (`GET .../probe-improvements-available`,
+    checked every 30 minutes).
+- **New problem:** a Manny assembling a probe while that probe moves. That's
+  critical, because the Manny can be left behind. While the move is still
+  preparing, it is auto-cancelled with `DELETE /api/probe/{id}/move`.
+
 ## Develop
 
 ```bash
@@ -128,5 +156,5 @@ The mock (`mock/`) is typed against the generated schema too, so it can't drift 
 
 1. Foundation and read-only live view
 2. Problems page with automatic fixes, fix log, discoveries
-3. 24/7 automation: 3a mining, construct inspection, naming (this); 3b crafting and probe-build suggestions; 3c exploration. Rules (mining, crafting, repair, deuterium, storage, exploration within SCUT range, inspecting dormant constructs, probe-build suggestions, automatic naming)
+3. 24/7 automation: 3a mining, construct inspection, naming; 3b crafting and probe-build suggestions (this); 3c exploration. Rules (mining, crafting, repair, deuterium, storage, exploration within SCUT range, inspecting dormant constructs, probe-build suggestions, automatic naming)
 4. Remaining endpoints as manual controls, plus messaging, logbook and forum

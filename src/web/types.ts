@@ -12,5 +12,6 @@ export interface PanelState {
   problems: Problem[];
   unreadDiscoveries: number;
   automationMode: AutoFixMode;
+  readySuggestions?: number;
 }
 export type { AutomationSettings, AutomationAction, AutomationLogEntry, PlannedRename, ProbeAutomationSettings, ProbeRole } from "../shared/automation";

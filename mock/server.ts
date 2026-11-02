@@ -54,6 +54,7 @@ export function startMock(port = 0, opts: MockOpts = {}) {
     if (p === "/api/me") return json(200, { player: { id: 1, username: "mock", displayName: "Mock", forumAdmin: false, forumModerator: false } }, h);
     if (p === "/api/probes") return json(200, { defaultProbeId: 1, probes: world.summaries }, h);
     if (p === "/api/probe/missions") return json(200, { missions: world.missions }, h);
+    if (p === "/api/crafting-recipes") return json(200, { recipes: world.recipes }, h);
     if (p === "/api/visited-sectors") return json(200, { visitedSectors: world.visited }, h);
     if (p === "/api/sector") {
       const v = { x: Number(url.searchParams.get("x")), y: Number(url.searchParams.get("y")), z: Number(url.searchParams.get("z")) };
@@ -61,6 +62,11 @@ export function startMock(port = 0, opts: MockOpts = {}) {
       return json(200, { sector: world.visitedSectorObs(v) }, h);
     }
 
+    if (req.method === "DELETE") {
+      posts.push({ path: "DELETE " + p, body: null });
+      res.writeHead(204, h);
+      return res.end();
+    }
     if (req.method === "POST" || req.method === "PATCH") {
       let raw = "";
       req.on("data", (c) => (raw += c));

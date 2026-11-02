@@ -10,7 +10,7 @@ import { clearOrders } from "../src/server/orders.ts";
 import { DEFAULT_PROBE_SETTINGS, type AutomationSettings } from "../src/shared/automation.ts";
 
 const settings = (over: Partial<AutomationSettings> = {}): AutomationSettings => ({
-  mode: "auto", inspectConstructs: true, naming: false, defaults: { ...DEFAULT_PROBE_SETTINGS }, probes: {}, lockedNames: [], ...over,
+  mode: "auto", inspectConstructs: true, naming: false, crafting: true, craftQueue: {}, defaults: { ...DEFAULT_PROBE_SETTINGS }, probes: {}, lockedNames: [], ...over,
 });
 
 async function setup() {

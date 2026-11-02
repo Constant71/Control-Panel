@@ -69,6 +69,7 @@ const endpointFor = (plan: FixPlan): string => {
     case "transfer_deuterium": return `POST /api/probe/${plan.probeId}/mannies/${plan.mannyId}/transfer-deuterium-to-probe`;
     case "salvage": return `POST /api/probe/${plan.probeId}/mannies/${plan.mannyId}/salvage`;
     case "recall": return `POST /api/probe/${plan.probeId}/mannies/${plan.mannyId}/recall`;
+    case "cancel_move": return `DELETE /api/probe/${plan.probeId}/move`;
     case "mind_snapshot_reassign": return "POST /api/probe/mind-snapshot/reassign";
   }
 };
@@ -87,6 +88,7 @@ function fixId(plan: FixPlan): string {
     case "transfer_deuterium": return `transfer_deuterium:${plan.probeId}>${plan.targetProbeId}`;
     case "salvage": return `salvage:${plan.objectId}`;
     case "recall": return `recall:${plan.mannyId}`;
+    case "cancel_move": return `cancel_move:${plan.probeId}`;
     case "mind_snapshot_reassign": return "mind_snapshot_reassign";
   }
 }
@@ -292,6 +294,23 @@ export function detectProblems(snapshot: Snapshot, opts: DetectOptions = {}): Pr
         source: "Probe.systems.integrityPercent", fixes, advice,
       });
     }
+
+    // A Manny assembling a probe outside while its probe moves away can be left behind (assemble-probe spec).
+    if (moving)
+      for (const m of v.mannies ?? []) {
+        if (m.currentTask !== "assembling_probe") continue;
+        const preparing = d.movement?.status === "preparing";
+        out.push({
+          key: `manny:${m.id}:assembly_left_behind`, severity: "critical", code: "assembly_probe_moving",
+          title: `${m.name} is assembling a probe while ${d.name} moves`, detail: "If the probe leaves the sector before the 3-hour build ends, the Manny can be left behind as a forgotten Manny.",
+          ...base(v), mannyId: m.id, mannyName: m.name, since: m.taskStartTime, deadline: m.taskEstimatedEndTime,
+          source: "Manny.currentTask = assembling_probe, Probe.movement",
+          fixes: preparing
+            ? [fix({ kind: "cancel_move", probeId: d.id }, `Cancel ${d.name}'s move`, "The move is still preparing, so it can be cancelled and the reserved deuterium is refunded. The build then finishes normally.", "auto")]
+            : [],
+          advice: preparing ? null : "The move is past preparation, so the API can't cancel it. Once the build time is up, check Problems for a forgotten Manny.",
+        });
+      }
 
     // Deuterium → refuel station, or transfer from a probe in the same sector
     const max = d.fuel.maxDeuterium ?? 100;

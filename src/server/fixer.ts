@@ -185,6 +185,9 @@ export class Fixer extends EventEmitter {
       case "recall":
         r = await c.POST("/api/probe/{probeId}/mannies/{mannyId}/recall", mp(plan.probeId, plan.mannyId));
         break;
+      case "cancel_move":
+        r = await c.DELETE("/api/probe/{probeId}/move", { params: { path: { probeId: plan.probeId } } });
+        break;
       case "mind_snapshot_reassign":
         r = await c.POST("/api/probe/mind-snapshot/reassign", { body: {} });
         break;

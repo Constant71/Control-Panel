@@ -66,6 +66,17 @@ export function buildWorld() {
       inventory: inventory(0.3),
     },
   ];
+  // Prime carries an atomic printer and most of a generic assembly kit (no SCUT relay yet),
+  // plus two empty additional containers.
+  const item = (type: S["ProbeInventoryItem"]["type"], n: number, space: number): S["ProbeInventoryItem"][] =>
+    Array.from({ length: n }, (_, i) => ({ id: `itm-${type}-${i}`, type, name: type, containerSpace: space }));
+  probes[0].inventory!.items.push(
+    ...item("atomic_3d_printer", 1, 0), ...item("steel_bar", 3, 0.005), ...item("electric_motor", 5, 0.01),
+    ...item("solar_panel", 4, 0.015), ...item("atomic_printer_part", 2, 0.01), ...item("deuterium_engine", 1, 0.05),
+  );
+  probes[0].inventory!.containers.push(
+    container("container-itm_empty1", "Extra 2", "container", 0.25, 0), container("container-itm_empty2", "Extra 3", "container", 0.25, 0),
+  );
   const farProbe: S["ProbeLimitedTelemetry"] = {
     id: 3, name: "Far Reach", status: "out_of_scut_range", sector: { relative: { x: 4, y: -2, z: 1 } },
   };
@@ -145,5 +156,25 @@ export function buildWorld() {
   ];
 
   const missions: S["Mission"][] = [];
-  return { probes, farProbe, summaries, mannies, alerts, sector, visited, missions, visitedSectorObs, improvements };
+
+  // Mock-only recipe list. The first four follow the spec's example; the rest are
+  // simplified stand-ins so tests have a tree to walk. The panel always uses the live list.
+  const ing = (type: S["CraftingRecipeIngredient"]["type"], quantity: number): S["CraftingRecipeIngredient"] => ({
+    type, quantity, unit: ["metals", "ice", "deuterium", "carbon_compounds"].includes(type) ? "earth_container_equivalent" : "item",
+  });
+  const recipe = (id: S["CraftingRecipe"]["id"], by: "manny" | "atomic_3d_printer", ingredients: S["CraftingRecipeIngredient"][], durationSeconds: number, space: number): S["CraftingRecipe"] => ({
+    id, name: id.replaceAll("_", " "), description: "Mock recipe.", craftableBy: [by], ingredients, durationSeconds,
+    output: { type: id, name: id.replaceAll("_", " "), containerSpace: space, containerSpaceUnit: "earth_container_equivalent" },
+  });
+  const recipes: S["CraftingRecipe"][] = [
+    recipe("waypoint_bookmark", "manny", [ing("metals", 0.01)], 600, 0.01),
+    recipe("solar_panel", "manny", [ing("micro_conductor", 2), ing("crystal_substrate", 1), ing("ceramic_insulator", 1), ing("steel_plate", 1), ing("metals", 0.02)], 1800, 0.015),
+    recipe("integrated_circuit", "atomic_3d_printer", [ing("micro_conductor", 2), ing("deuterium", 0.05)], 1200, 0.001),
+    recipe("atomic_printer_part", "atomic_3d_printer", [ing("micro_conductor", 2), ing("deuterium", 0.05)], 2700, 0.01),
+    recipe("steel_bar", "manny", [ing("metals", 0.02)], 300, 0.005),
+    recipe("steel_plate", "manny", [ing("steel_bar", 2)], 300, 0.005),
+    recipe("micro_conductor", "atomic_3d_printer", [ing("metals", 0.005)], 600, 0.001),
+    recipe("electric_motor", "manny", [ing("steel_bar", 1), ing("micro_conductor", 1)], 900, 0.01),
+  ];
+  return { probes, farProbe, summaries, mannies, alerts, sector, visited, missions, visitedSectorObs, improvements, recipes };
 }

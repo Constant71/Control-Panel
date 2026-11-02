@@ -21,7 +21,8 @@ export type FixPlan =
   | { kind: "transfer_deuterium"; probeId: number; mannyId: string; targetProbeId: number; amount: number }
   | { kind: "salvage"; probeId: number; mannyId: string; objectId: string }
   | { kind: "recall"; probeId: number; mannyId: string }
-  | { kind: "mind_snapshot_reassign" };
+  | { kind: "mind_snapshot_reassign" }
+  | { kind: "cancel_move"; probeId: number };
 
 export interface FixOption {
   /** Stable id: same plan target → same id across polls. */

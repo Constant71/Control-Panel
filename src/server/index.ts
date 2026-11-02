@@ -54,6 +54,7 @@ function panelState() {
     problems: fixer.problems,
     unreadDiscoveries: discovery.discoveries().filter((d) => !d.read && d.present).length,
     automationMode: automation.settings.mode,
+    readySuggestions: automation.suggestions.filter((x) => x.ready).length,
   };
 }
 
@@ -106,6 +107,34 @@ app.post<{ Body: Partial<AutomationSettings> }>("/panel-api/automation/settings"
 }));
 
 app.post("/panel-api/automation/revert-names", async () => ({ reverted: await automation.revertNames(poller.snapshot) }));
+
+app.get("/panel-api/crafting", async () => ({
+  enabled: automation.settings.crafting,
+  mode: automation.settings.mode,
+  recipes: automation.recipes,
+  queue: automation.settings.craftQueue,
+  statuses: automation.crafting,
+  suggestions: automation.suggestions,
+  holds: automation.holds(poller.snapshot),
+}));
+
+app.post<{ Body: { probeId?: number; goals?: unknown[] } }>("/panel-api/crafting/queue", async (req, reply) => {
+  const { probeId, goals } = req.body ?? {};
+  if (!Number.isInteger(probeId) || !Array.isArray(goals)) return reply.code(400).send({ error: "probeId and goals are required" });
+  return { goals: await automation.setQueue(probeId!, goals as never[]) };
+});
+
+app.post<{ Body: { suggestionId?: string } }>("/panel-api/crafting/queue-missing", async (req, reply) => {
+  const goals = await automation.queueMissing(String(req.body?.suggestionId ?? ""));
+  if (!goals) return reply.code(404).send({ error: "That suggestion no longer applies." });
+  return { goals };
+});
+
+// Build suggestions only ever run from here, after Merchant presses Confirm.
+app.post<{ Body: { id?: string } }>("/panel-api/suggestions/confirm", async (req, reply) => {
+  if (!req.body?.id) return reply.code(400).send({ error: "id is required" });
+  return { entry: await automation.confirmSuggestion(req.body.id) };
+});
 
 app.get("/panel-api/discoveries", async () => ({ discoveries: discovery.discoveries(), scans: discovery.scans() }));
 
