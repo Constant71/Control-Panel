@@ -3,7 +3,7 @@
  * so a live problem can be diagnosed without access to the server. Secrets never leave:
  * the API key, the panel password and anything shaped like a key or token is replaced.
  */
-const SECRET_KEYS = /^(api[-_]?key|key|token|accessToken|refreshToken|sessionToken|password|secret|authorization|cookie)$/i;
+const SECRET_KEYS = /^(api[-_]?key|token|accessToken|refreshToken|sessionToken|password|secret|authorization|cookie)$/i;
 const SECRET_TEXT = /\b(vng_[A-Za-z0-9_-]+|Bearer\s+[A-Za-z0-9._~+/=-]+)/g;
 
 export function redact(value: unknown, secrets: string[] = []): unknown {

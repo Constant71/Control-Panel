@@ -257,3 +257,22 @@ test("an idle Hauler or Tanker away from the station is sent home, but not while
     await mock.close();
   }
 });
+
+test("a trip whose probe left the group is dropped, so nothing keeps holding its mining", async () => {
+  const { mock, poller } = await setup();
+  try {
+    const snap = world(poller.snapshot);
+    const iso = new Date().toISOString();
+    const trip: Trip = {
+      id: "r", stationId: 1, haulerId: 2, target: { x: 0, y: 0, z: 0 }, home: { x: 0, y: 0, z: 0 }, resource: "", reason: "return to the station",
+      state: "returning", startedAt: iso, updatedAt: iso, arrivedAt: null, note: null, kind: "haul",
+    };
+    const d = data();
+    d.members = {};
+    const r = plan(snap, d, [trip]);
+    assert.equal(trip.state, "done");
+    assert.ok(!r.noMining.has(2));
+  } finally {
+    await mock.close();
+  }
+});

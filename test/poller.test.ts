@@ -24,8 +24,8 @@ test("full poll builds a fleet snapshot and respects reachability", async () => 
     assert.deepEqual(prime.errors, []);
 
     const scout = s.probes.find((p) => p.summary.id === 2)!;
-    assert.equal(scout.errors.length, 1, "sector scan while cruising is recorded, not fatal");
-    assert.equal(scout.errors[0].code, "sensors_unavailable");
+    assert.deepEqual(scout.errors, [], "no sector read while cruising: the API refuses it (sensors_unavailable)");
+    assert.equal(scout.sector, null);
     assert.equal(scout.damageWarnings?.length, 1);
 
     const far = s.probes.find((p) => p.summary.id === 3)!;

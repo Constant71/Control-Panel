@@ -42,6 +42,7 @@ export class Fixer extends EventEmitter {
     private readonly onActed: () => void,
     private readonly now: () => number = Date.now,
     private readonly dropCargoBeforeDeadlineMs?: number,
+    private readonly stationFuel?: () => { managed: Set<number>; advice: (probeId: number) => string },
   ) {
     super();
     this.store = new JsonStore<FixerState>(dataDir, "fixer.json", () => ({ mode: "auto", attempts: {}, log: [] }));
@@ -74,6 +75,7 @@ export class Fixer extends EventEmitter {
       now: t,
       recentlyOrderedMannies: recentlyOrdered(t),
       dropCargoBeforeDeadlineMs: this.dropCargoBeforeDeadlineMs,
+      stationFuel: this.stationFuel?.(),
     });
     if (this.state.mode === "off") {
       this.emit("changed");

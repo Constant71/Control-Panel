@@ -172,3 +172,29 @@ test("discoveries: scans visited sectors and flags potential blueprints", async 
     await mock.close();
   }
 });
+
+test("the fixer never moves deuterium to or from station-managed probes (no ping-pong with station service)", async () => {
+  const { mock, poller } = await setup();
+  try {
+    const snap = structuredClone(poller.snapshot);
+    const scout = snap.probes[1].detail as import("../src/server/gameClient.ts").Schemas["Probe"];
+    delete scout.movement;
+    scout.status = "orbiting";
+    scout.sector = { relative: { x: 0, y: 0, z: 0 } };
+    scout.fuel.deuterium = 1;
+    (snap.probes[0].detail as typeof scout).fuel.deuterium = 90;
+    for (const v of snap.probes) v.mannies = v.mannies?.map((m) => ({ ...m, currentTask: null, task: [], location: { type: "probe", sector: null }, canReceiveOrders: true })) ?? null;
+    for (const v of snap.probes) if (v.sector) v.sector.objects = (v.sector.objects ?? []).filter((o) => o.type !== "deuterium_refuel_station");
+    snap.probes[1].sector = structuredClone(snap.probes[0].sector);
+    const fuelFix = (opts = {}) => detectProblems(snap, opts).find((p) => p.key === "probe:2:fuel")!;
+
+    assert.ok(fuelFix().fixes.some((f) => f.plan.kind === "transfer_deuterium" && f.plan.probeId === 1), "unmanaged: Prime donates");
+    const advice = () => "Station Tanker: a low tank is expected.";
+    const tanker = fuelFix({ stationFuel: { managed: new Set([2]), advice } });
+    assert.equal(tanker.fixes.length, 0);
+    assert.equal(tanker.advice, "Station Tanker: a low tank is expected.");
+    assert.equal(fuelFix({ stationFuel: { managed: new Set([1]), advice } }).fixes.length, 0, "a station is never a donor");
+  } finally {
+    await mock.close();
+  }
+});
