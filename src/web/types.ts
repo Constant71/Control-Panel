@@ -13,6 +13,7 @@ export interface PanelState {
   unreadDiscoveries: number;
   automationMode: AutoFixMode;
   readySuggestions?: number;
+  pendingMoves?: number;
   orders?: Record<string, PanelOrder>;
   planned?: Array<{ probeId: number | null; mannyId: string | null; label: string; why: string }>;
 }

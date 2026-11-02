@@ -59,7 +59,9 @@ export function startMock(port = 0, opts: MockOpts = {}) {
     if (p === "/api/sector") {
       const v = { x: Number(url.searchParams.get("x")), y: Number(url.searchParams.get("y")), z: Number(url.searchParams.get("z")) };
       if (![v.x, v.y, v.z].every(Number.isInteger)) return json(400, { error: { code: "bad_request", message: "x, y, z required" } }, h);
-      return json(200, { sector: world.visitedSectorObs(v) }, h);
+      if ((v.x + v.y + v.z) % 2 !== 0) return json(400, { error: { code: "bad_request", message: `Invalid coordinates (${v.x}, ${v.y}, ${v.z}): sum must be even` } }, h);
+      const seen = world.visited.some((s) => s.relativeCoordinates.x === v.x && s.relativeCoordinates.y === v.y && s.relativeCoordinates.z === v.z);
+      return json(200, { sector: seen ? world.visitedSectorObs(v) : world.neighborScan(v) }, h);
     }
 
     if (req.method === "DELETE") {

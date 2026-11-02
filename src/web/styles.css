@@ -146,3 +146,5 @@ dl.raw { margin: 4px 0 0; display: grid; gap: 1px; }
 dl.raw > div { display: flex; gap: 8px; }
 dl.raw dt { color: var(--muted, #8b98a5); min-width: 140px; word-break: break-all; }
 dl.raw dd { margin: 0; word-break: break-all; }
+.tag.ex-needs_you { color: var(--warn); border-color: var(--warn); }
+.tag.ex-moving { color: var(--good); }

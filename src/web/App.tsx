@@ -60,7 +60,9 @@ export function App() {
           <a className={route.view === "builds" ? "on" : ""} href="#/builds">
             Builds{state && <Badge n={state.readySuggestions ?? 0} sev="info" />}
           </a>
-          <a className={route.view === "map" ? "on" : ""} href="#/map">Map</a>
+          <a className={route.view === "map" ? "on" : ""} href="#/map">
+            Map{state && <Badge n={state.pendingMoves ?? 0} sev="warning" />}
+          </a>
           <a className={route.view === "missions" ? "on" : ""} href="#/missions">Missions</a>
           <a className={route.view === "system" ? "on" : ""} href="#/system">System</a>
         </nav>

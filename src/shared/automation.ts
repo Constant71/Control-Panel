@@ -16,6 +16,13 @@ export interface ProbeAutomationSettings {
   /** Stock targets in ECE; deuterium is a percent of the tank. */
   targets: { metals: number; ice: number; carbon_compounds: number; deuteriumPercent: number };
   role: ProbeRole;
+  /** Hop to unvisited neighbour sectors (in-range moves run on their own; others ask). */
+  explore: boolean;
+  /** Minutes to work a sector before moving on. */
+  exploreDwellMinutes: number;
+  /** Never leave with less fuel than this percent of the tank (after the jump). */
+  exploreMinFuelPercent: number;
+  exploreMinIntegrity: number;
 }
 
 export interface AutomationSettings {
@@ -39,6 +46,7 @@ export type AutomationPlan =
   | { kind: "print"; probeId: number; mannyId: string; recipe: string; output: string }
   | { kind: "assemble"; probeId: number; mannyId: string; model: "generic" | "deuterium_tanker"; containerIds: string[] }
   | { kind: "improve"; probeId: number; mannyId: string; improvement: string }
+  | { kind: "move"; probeId: number; target: { x: number; y: number; z: number } }
   | { kind: "rename_probe"; probeId: number; name: string }
   | { kind: "rename_manny"; probeId: number; mannyId: string; name: string }
   | { kind: "rename_container"; probeId: number; containerId: string; label: string };
@@ -83,4 +91,8 @@ export const DEFAULT_PROBE_SETTINGS: ProbeAutomationSettings = {
   orderAmount: 0.1,
   targets: { metals: 0.3, ice: 0.2, carbon_compounds: 0.2, deuteriumPercent: 80 },
   role: "Probe",
+  explore: false,
+  exploreDwellMinutes: 60,
+  exploreMinFuelPercent: 50,
+  exploreMinIntegrity: 40,
 };

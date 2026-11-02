@@ -71,7 +71,8 @@ function panelState() {
     problems: fixer.problems,
     unreadDiscoveries: discovery.discoveries().filter((d) => !d.read && d.present).length,
     automationMode: automation.settings.mode,
-    readySuggestions: automation.suggestions.filter((x) => x.ready).length,
+    readySuggestions: automation.suggestions.filter((x) => x.ready && x.kind !== "move_probe").length,
+    pendingMoves: automation.suggestions.filter((x) => x.kind === "move_probe").length,
     orders: lastOrders(),
     planned: automation.lastPlan.map((a) => ({
       probeId: "probeId" in a.plan ? a.plan.probeId : null, mannyId: "mannyId" in a.plan ? a.plan.mannyId : null, label: a.label, why: a.why,
@@ -156,6 +157,12 @@ app.post<{ Body: { id?: string } }>("/panel-api/suggestions/confirm", async (req
   if (!req.body?.id) return reply.code(400).send({ error: "id is required" });
   return { entry: await automation.confirmSuggestion(req.body.id) };
 });
+
+app.get("/panel-api/exploration", async () => ({
+  mode: automation.settings.mode,
+  status: automation.exploration,
+  suggestions: automation.suggestions.filter((x) => x.kind === "move_probe"),
+}));
 
 app.get("/panel-api/discoveries", async () => ({ discoveries: discovery.discoveries(), scans: discovery.scans() }));
 

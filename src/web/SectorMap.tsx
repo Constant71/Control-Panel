@@ -2,6 +2,7 @@ import { useMemo, useState } from "react";
 import type { PanelState } from "./types";
 import { isFullProbe } from "../shared/attention";
 import { ago } from "./format";
+import { ExplorationPanel } from "./ExplorationPanel";
 
 type V = { x: number; y: number; z: number };
 const key = (v: V) => `${v.x},${v.y},${v.z}`;
@@ -116,6 +117,7 @@ export function SectorMap({ state }: { state: PanelState }) {
           ))}
         </div>
       )}
+      <ExplorationPanel state={state} />
     </div>
   );
 }

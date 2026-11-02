@@ -34,8 +34,9 @@ export function BuildsView({ state, now }: { state: PanelState; now: number }) {
   }, [state.snapshot.lastPollFinishedAt]);
   if (!data) return <p className="pad muted">Loading…</p>;
 
-  const ready = data.suggestions.filter((x) => x.ready);
-  const later = data.suggestions.filter((x) => !x.ready);
+  const builds = data.suggestions.filter((x) => x.kind !== "move_probe");
+  const ready = builds.filter((x) => x.ready);
+  const later = builds.filter((x) => !x.ready);
 
   const confirm = async (s: Suggestion) => {
     const msg = [
@@ -110,7 +111,7 @@ export function BuildsView({ state, now }: { state: PanelState; now: number }) {
   );
 }
 
-function SuggestionCard({ s, onConfirm, onQueue }: { s: Suggestion; onConfirm: (s: Suggestion) => void; onQueue: (s: Suggestion) => void }) {
+export function SuggestionCard({ s, onConfirm, onQueue }: { s: Suggestion; onConfirm: (s: Suggestion) => void; onQueue: (s: Suggestion) => void }) {
   return (
     <div className={`card ${s.ready ? "ready" : ""}`}>
       <div className="card-h">
@@ -119,21 +120,21 @@ function SuggestionCard({ s, onConfirm, onQueue }: { s: Suggestion; onConfirm: (
       </div>
       <div className="tiny"><b>Why</b></div>
       <ul className="plain tiny">{s.why.map((w, i) => <li key={i}>{w}</li>)}</ul>
-      <div className="tiny mt"><b>What it uses</b></div>
-      <div className="kit">
+      {(s.kind !== "move_probe" || s.consumes.length > 0) && <div className="tiny mt"><b>What it uses</b></div>}
+      {(s.kind !== "move_probe" || s.consumes.length > 0) && <div className="kit">
         {s.consumes.length === 0 && <span className="muted tiny">No ingredients.</span>}
         {s.consumes.map((l) => (
           <span key={l.item} className={`kitline ${l.have + 1e-9 >= l.need ? "have" : "short"}`}>{+l.have.toFixed(3)}/{l.need} {nice(l.item)}</span>
         ))}
-      </div>
+      </div>}
       {s.blockers.length > 0 && <ul className="plain tiny warn-text mt">{s.blockers.map((b, i) => <li key={i}>{b}</li>)}</ul>}
-      <details className="tiny mt">
+      <details className="tiny mt" open={s.kind === "move_probe"}>
         <summary>Risks and what the panel does about them</summary>
         <ul className="plain">{s.risks.map((r, i) => <li key={i}>{r}</li>)}</ul>
-        <div className="muted"><code>{s.endpoint}</code> · {hours(s.durationSeconds)}</div>
+        <div className="muted"><code>{s.endpoint}</code>{s.durationSeconds ? ` · ${hours(s.durationSeconds)}` : ""}</div>
       </details>
       <div className="actions mt">
-        {s.ready && <button className="primary" onClick={() => onConfirm(s)}>Confirm: {s.kind === "assemble_probe" ? "assemble" : "install"}</button>}
+        {s.ready && <button className="primary" onClick={() => onConfirm(s)}>Confirm: {s.kind === "assemble_probe" ? "assemble" : s.kind === "move_probe" ? "move" : "install"}</button>}
         {s.missing.some((l) => !["metals", "ice", "deuterium", "carbon_compounds"].includes(l.item)) && (
           <button onClick={() => onQueue(s)}>Queue the missing parts</button>
         )}
