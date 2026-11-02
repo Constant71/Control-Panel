@@ -176,6 +176,29 @@ export function buildWorld() {
 
   const missions: S["Mission"][] = [];
 
+  const party = (id: number, name: string) => ({ type: "probe" as const, id, probeId: id, name });
+  const messages: Record<number, S["ProbeMessage"][]> = {
+    1: [
+      { id: 11, sender: party(42, "Wanderer"), recipient: party(1, "Prime"), sector: { relative: { x: 0, y: 0, z: 0 } },
+        body: "Hello neighbour. Metal asteroid two sectors out.", status: "unread", readAt: null, createdAt: iso(-3_600_000), updatedAt: iso(-3_600_000) },
+      { id: 10, sender: party(2, "Scout"), recipient: party(1, "Prime"), sector: { relative: { x: 0, y: 0, z: 0 } },
+        body: "Test from Scout.", status: "read", readAt: iso(-DAY), createdAt: iso(-2 * DAY), updatedAt: iso(-DAY) },
+    ],
+  };
+  const logbook: S["ProbeLogbookPage"][] = [
+    { id: 1, probeId: 1, title: "First relay", sortOrder: 1, content: "The relay is stable.", createdAt: iso(-5 * DAY), updatedAt: iso(-DAY) } as S["ProbeLogbookPage"],
+  ];
+  const author = { playerId: 7, username: "gnome", displayName: "Gnome" };
+  const forum = {
+    categories: [{ id: 1, name: "General", description: "Anything goes", sortOrder: 1, createdAt: iso(-30 * DAY), updatedAt: iso(-30 * DAY) }] as S["ForumCategory"][],
+    posts: [{ id: 5, categoryId: 1, author, title: "Where are the blueprints?", pinned: false, firstMessageId: 50, messageCount: 2,
+      createdAt: iso(-2 * DAY), updatedAt: iso(-DAY), lastMessageAt: iso(-DAY) }] as S["ForumPost"][],
+    messages: [
+      { id: 50, postId: 5, author, body: "Has anyone found a dormant construct?", createdAt: iso(-2 * DAY), updatedAt: iso(-2 * DAY), editedAt: null },
+      { id: 51, postId: 5, author: { playerId: 1, username: "mock", displayName: "Mock" }, body: "Inspect them with a Manny.", createdAt: iso(-DAY), updatedAt: iso(-DAY), editedAt: null },
+    ] as S["ForumMessage"][],
+  };
+
   // Mock-only recipe list. The first four follow the spec's example; the rest are
   // simplified stand-ins so tests have a tree to walk. The panel always uses the live list.
   const ing = (type: S["CraftingRecipeIngredient"]["type"], quantity: number): S["CraftingRecipeIngredient"] => ({
@@ -195,5 +218,5 @@ export function buildWorld() {
     recipe("micro_conductor", "atomic_3d_printer", [ing("metals", 0.005)], 600, 0.001),
     recipe("electric_motor", "manny", [ing("steel_bar", 1), ing("micro_conductor", 1)], 900, 0.01),
   ];
-  return { probes, farProbe, summaries, mannies, alerts, sector, visited, missions, visitedSectorObs, neighborScan, improvements, recipes };
+  return { probes, farProbe, summaries, mannies, alerts, sector, visited, missions, visitedSectorObs, neighborScan, improvements, recipes, messages, logbook, forum };
 }

@@ -14,6 +14,8 @@ export interface PanelState {
   automationMode: AutoFixMode;
   readySuggestions?: number;
   pendingMoves?: number;
+  unreadMessages?: number;
+  unreadByProbe?: Record<string, number>;
   orders?: Record<string, PanelOrder>;
   planned?: Array<{ probeId: number | null; mannyId: string | null; label: string; why: string }>;
 }

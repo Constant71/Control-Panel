@@ -28,13 +28,28 @@ export class Game {
   private static readonly LOG_SIZE = 300;
 
   constructor(
-    baseUrl: string,
+    private readonly baseUrl: string,
     private readonly apiKey: string,
     readonly limiter: RateLimiter,
     private readonly fetchImpl: typeof fetch = fetch,
   ) {
     this.poll = createClient<paths>({ baseUrl, fetch: this.paced("poll") });
     this.action = createClient<paths>({ baseUrl, fetch: this.paced("action") });
+  }
+
+  /**
+   * Untyped call used only by the manual console, which checks the operation,
+   * its parameters and its body against the spec catalog before calling this.
+   */
+  async raw(method: string, path: string, query: Record<string, string>, body: unknown): Promise<Response> {
+    const url = new URL(this.baseUrl.replace(/\/+$/, "") + path);
+    for (const [k, v] of Object.entries(query)) url.searchParams.set(k, v);
+    const init: RequestInit = { method };
+    if (body !== undefined && body !== null) {
+      init.body = JSON.stringify(body);
+      init.headers = { "Content-Type": "application/json" };
+    }
+    return this.paced(method === "GET" ? "poll" : "action")(new Request(url, init));
   }
 
   private paced(priority: Priority) {

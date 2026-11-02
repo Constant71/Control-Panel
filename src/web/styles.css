@@ -148,3 +148,26 @@ dl.raw dt { color: var(--muted, #8b98a5); min-width: 140px; word-break: break-al
 dl.raw dd { margin: 0; word-break: break-all; }
 .tag.ex-needs_you { color: var(--warn); border-color: var(--warn); }
 .tag.ex-moving { color: var(--good); }
+
+/* Console + comms (step 4) */
+.console-grid { display: grid; grid-template-columns: minmax(260px, 340px) 1fr; gap: 12px; align-items: start; }
+@media (max-width: 760px) { .console-grid { grid-template-columns: 1fr; } }
+.oplist { max-height: 75vh; overflow: auto; }
+.oplist ul li { padding: 4px 6px; border-radius: 4px; cursor: pointer; font-size: 13px; }
+.oplist ul li:hover, .oplist ul li.on { background: var(--panel2); }
+.oplist .search, .oplist select { width: 100%; margin-bottom: 6px; }
+.meth { font-family: ui-monospace, monospace; font-size: 10px; padding: 1px 4px; border-radius: 3px; border: 1px solid var(--line); }
+.m-GET { color: var(--info); } .m-POST { color: var(--good); } .m-PATCH { color: var(--accent); } .m-DELETE { color: var(--crit); }
+.field { display: flex; flex-direction: column; gap: 2px; margin: 6px 0; }
+.field input, .field select, .field textarea, .card textarea, .card input.title, .oplist input, .oplist select, .addgoal input:not([type=checkbox]) {
+  background: var(--panel2); color: var(--text); border: 1px solid var(--line); border-radius: 6px; padding: 6px 8px; font: inherit; max-width: 100%; box-sizing: border-box;
+}
+.card textarea, .card input.title { width: 100%; margin: 4px 0; }
+textarea.json, pre.json { width: 100%; font-family: ui-monospace, monospace; font-size: 12px; background: var(--bg); color: var(--text); border: 1px solid var(--line); border-radius: 6px; padding: 8px; overflow: auto; max-height: 50vh; box-sizing: border-box; }
+fieldset.nested { border: 1px solid var(--line); border-radius: 6px; margin: 6px 0; padding: 4px 8px; }
+.checks { display: flex; flex-wrap: wrap; gap: 8px; }
+button.danger { background: var(--crit); color: #1a0306; border-color: var(--crit); }
+.pre { white-space: pre-wrap; word-break: break-word; }
+.clickable { cursor: pointer; }
+.clickable:hover { border-color: var(--accent); }
+.console code { word-break: break-all; } .console .card-h { flex-wrap: wrap; } button:disabled { opacity: .45; cursor: not-allowed; }

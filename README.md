@@ -179,6 +179,29 @@ then works like this:
    Manny is in another sector or waiting for storage, it says so and points to
    the Problems page instead of leaving.
 
+## Step 4: Console, Comms and alert controls
+
+- **Console:** every call in the game API spec is listed, grouped and
+  searchable. Each form is built from the spec's own parameters and
+  request-body schema. Probes, Mannies, sector objects, containers and items
+  are offered as pickers.
+  - The server checks required fields, enums, types and lengths against the spec
+    before anything is sent.
+  - Calls that can lose things ask for confirmation: deletes, jettison, missiles,
+    asteroid launches, dropping or detaching containers, assembly, moves,
+    transfers, recalls, dropping cargo, mind-snapshot reassignment, abandoning
+    missions, and forum moderation.
+  - Logging in and creating API keys are switched off.
+  - A Manny you give an order to is left alone by the automation for 2 minutes.
+  - The catalog is regenerated from `spec/openapi.yaml` by `npm run gen:api`.
+- **Comms:**
+  - Probe messages: received messages per probe, mark read, send to a probe or
+    planet, and the sent list for the default probe.
+  - Probe logbook pages: list, read, write, edit, delete.
+  - The forum: categories, posts, replies, new posts.
+  - Unread messages are checked every 5 minutes and shown as a nav badge.
+- **Alerts tab** on each probe: mark read, mark all read, delete alerts and damage warnings.
+
 ## Develop
 
 ```bash
@@ -195,5 +218,6 @@ The mock (`mock/`) is typed against the generated schema too, so it can't drift 
 
 1. Foundation and read-only live view
 2. Problems page with automatic fixes, fix log, discoveries
-3. 24/7 automation: 3a mining, construct inspection, naming; 3b crafting and probe-build suggestions; 3c exploration (this). Rules (mining, crafting, repair, deuterium, storage, exploration within SCUT range, inspecting dormant constructs, probe-build suggestions, automatic naming)
-4. Remaining endpoints as manual controls, plus messaging, logbook and forum
+3. 24/7 automation: 3a mining, construct inspection, naming; 3b crafting and probe-build suggestions; 3c exploration. Rules (mining, crafting, repair, deuterium, storage, exploration within SCUT range, inspecting dormant constructs, probe-build suggestions, automatic naming)
+4. Remaining endpoints as manual controls, plus messaging, logbook and forum (this)
+5. Stations (from the Stations design)
