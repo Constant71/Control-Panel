@@ -19,6 +19,7 @@ import { redact, diagnosticsFilename } from "./diagnostics.js";
 import type { AutomationSettings } from "../shared/automation.js";
 import type { AutoFixMode } from "../shared/problems.js";
 import type { PanelOrder } from "../shared/activity.js";
+import { storageHealth } from "./store.js";
 
 const config = loadConfig();
 const STARTED_AT = new Date().toISOString();
@@ -104,6 +105,7 @@ function panelState() {
     orders: lastOrders(),
     unreadMessages: comms.unreadCount,
     stationIds: stations.stations.map((x) => x.probeId),
+    storageError: storageHealth.error,
     stationMembers: stations.members,
     stationWarnings: stations.status().reduce((n, x) => n + x.checks.filter((c) => !c.ok).length, 0),
     unreadByProbe: Object.fromEntries(Object.entries(comms.unread).map(([k, v]) => [k, v.length])),

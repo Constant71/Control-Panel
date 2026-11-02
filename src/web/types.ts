@@ -18,6 +18,8 @@ export interface PanelState {
   stationIds?: number[];
   stationMembers?: Record<string, StationMember>;
   stationWarnings?: number;
+  /** Set when the panel can't write its data folder: settings would be lost on restart. */
+  storageError?: string | null;
   unreadByProbe?: Record<string, number>;
   orders?: Record<string, PanelOrder>;
   planned?: Array<{ probeId: number | null; mannyId: string | null; label: string; why: string }>;

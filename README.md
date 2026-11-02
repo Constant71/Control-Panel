@@ -38,6 +38,10 @@ The clear token is only shown once. Put it in `.env` as `GAME_API_KEY`.
 All settings are listed in [`.env.example`](.env.example). The panel stores its
 last known state in the `panel-data` volume, so a restart shows data straight away.
 
+The container starts as root only to make the `/data` volume writable by the unprivileged `node` user
+(`docker-entrypoint.sh`), then runs the panel as `node`. If the panel ever can't save, a red banner says so on
+every page.
+
 ## What step 1 does (read-only)
 
 | View | Data comes from |
