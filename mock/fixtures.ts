@@ -146,7 +146,9 @@ export function buildWorld() {
   const visitedSectorObs = (v: { x: number; y: number; z: number }): S["SectorObservation"] => ({
     relativeCoordinates: v, distance: 1, knowledgeLevel: "detailed", confidence: 1,
     scan: {} as S["SectorObservation"]["scan"], scutCoverageStatus: "uncovered", scutNetworks: [],
-    objects: v.x === 2 && v.y === 0
+    // MOCK_GALAXY=1 fills the extra visited sectors with varied objects, to preview the projector star map.
+    objects: process.env.MOCK_GALAXY && galaxyObjects(v) ? galaxyObjects(v)!
+      : v.x === 2 && v.y === 0
       ? [{ id: "construct-7", type: "dormant_construct", name: "Dormant construct" } as S["SectorObject"],
          { id: "station-1", type: "deuterium_refuel_station", name: "Refuel station" } as S["SectorObject"]]
       : [],
@@ -172,6 +174,9 @@ export function buildWorld() {
     { relativeCoordinates: { x: 1, y: 1, z: 0 }, firstVisitedAt: iso(-10 * DAY), lastVisitedAt: iso(-3 * DAY), visitCount: 2 },
     { relativeCoordinates: { x: 2, y: 0, z: 0 }, firstVisitedAt: iso(-8 * DAY), lastVisitedAt: iso(-8 * DAY), visitCount: 1 },
     { relativeCoordinates: { x: 4, y: -2, z: 1 }, firstVisitedAt: iso(-2 * DAY), lastVisitedAt: iso(-2 * DAY), visitCount: 1 },
+    ...(process.env.MOCK_GALAXY ? GALAXY.map(([x, y, z]) => ({
+      relativeCoordinates: { x, y, z }, firstVisitedAt: iso(-15 * DAY), lastVisitedAt: iso(-4 * DAY), visitCount: 1,
+    })) : []),
   ];
 
   const missions: S["Mission"][] = [];
@@ -219,4 +224,27 @@ export function buildWorld() {
     recipe("electric_motor", "manny", [ing("steel_bar", 1), ing("micro_conductor", 1)], 900, 0.01),
   ];
   return { probes, farProbe, summaries, mannies, alerts, sector, visited, missions, visitedSectorObs, neighborScan, improvements, recipes, messages, logbook, forum };
+}
+
+/** Extra FCC-valid visited sectors for MOCK_GALAXY=1. */
+const GALAXY: Array<[number, number, number]> = [
+  [-1, 1, 0], [-2, 2, 0], [-1, 2, 1], [0, 2, 0], [1, 1, 2], [2, 2, 0], [3, 1, 0], [3, -1, 0], [2, -1, -1],
+  [1, -1, 0], [0, -1, -1], [-1, 0, -1], [-2, 0, 0], [-3, 1, 0], [4, 0, 0], [3, -2, -1], [0, 0, 2], [1, 0, 1],
+];
+function galaxyObjects(v: { x: number; y: number; z: number }): S["SectorObject"][] | null {
+  const i = GALAXY.findIndex(([x, y, z]) => x === v.x && y === v.y && z === v.z);
+  if (i < 0) return null;
+  const o = (type: string, extra: Record<string, unknown> = {}) => ({ id: `g${i}-${type}`, type, name: type, summary: type, ...extra }) as unknown as S["SectorObject"];
+  const sys = (stars: number, planets: number) => o("solar_system", { starCount: stars, planetCount: planets, orbitalBodyCount: planets });
+  switch (i % 9) {
+    case 0: return [sys(1, 4), o("asteroid")];
+    case 1: return [o("asteroid"), o("asteroid")];
+    case 2: return [sys(2, 2), o("scut_relay")];
+    case 3: return [o("black_hole")];
+    case 4: return [sys(1, 6), o("dormant_construct")];
+    case 5: return [o("dust_cloud")];
+    case 6: return [sys(1, 1), o("asteroid", { distinctiveFeature: "Sculpted in the shape of a duck" })];
+    case 7: return [o("star"), o("planet"), o("deuterium_refuel_station")];
+    default: return [];
+  }
 }

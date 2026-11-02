@@ -378,6 +378,15 @@ scaled in `em` for other sizes (`src/web/TvView.tsx`, `src/web/tv.css`). It read
 `/panel-api/crafting`, `/panel-api/stations` and `/panel-api/discoveries`, sends no orders, and reloads itself
 when `/panel-api/health` reports a new version.
 
+## Projector star map
+
+`/projector` (or `#/projector`) is a view-only 3D star map for a projector (`src/web/ProjectorView.tsx`), drawn on
+a canvas over pure black. Its data comes from `GET /panel-api/starmap` (`src/shared/starmap.ts`): visited sectors,
+per-sector object counts from the Discoveries scanner (stars and planets include `solar_system.starCount` /
+`planetCount`), SCUT coverage, exploration neighbour scans (`estimatedObjects`), probe positions and movements, unread
+dormant-construct discoveries and the worst open problem. Query options: `brightness`, `turn`, `labels`, `flip`,
+`mirror`, `backdrop`. `MOCK_GALAXY=1` on the mock game (`npm run dev:mock`) adds 18 varied visited sectors for previewing it.
+
 ## Debug export
 
 The System page has **Download debug export**: one JSON file (`GET /panel-api/diagnostics`) with the latest poll,

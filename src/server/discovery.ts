@@ -15,6 +15,7 @@ import type { Snapshot } from "./poller.js";
 import { JsonStore } from "./store.js";
 import type { Discovery, DiscoveryKind, SectorScanInfo } from "../shared/problems.js";
 import { mineableTargets } from "./automation.js";
+import { sectorProfile, type SectorProfile } from "../shared/starmap.js";
 
 /** What the panel knows about a sector for hauler trips (Stations 5c). */
 export interface SectorKnowledge {
@@ -39,6 +40,8 @@ interface SectorRecord {
   resources?: Record<string, number>;
   scutNetworkIds?: number[];
   coverage?: string | null;
+  /** What the last scan listed (projector star map). */
+  profile?: SectorProfile;
 }
 
 interface DiscoveryState {
@@ -101,6 +104,13 @@ export class DiscoveryTracker extends EventEmitter {
     return Object.values(this.state.sectors).map((s) => ({
       sector: s.sector, scannedAt: s.scannedAt, resources: s.resources ?? {}, scutNetworkIds: s.scutNetworkIds ?? [], coverage: s.coverage ?? null,
       hazards: s.objects.filter((o) => o.type === "black_hole" || o.type === "missile").map((o) => o.type),
+    }));
+  }
+
+  /** Per-sector object counts and SCUT coverage for the projector star map. */
+  starMapKnowledge(): Array<{ sector: Vec; profile: SectorProfile | null; coverage: string | null; scutNetworkIds: number[] }> {
+    return Object.values(this.state.sectors).map((s) => ({
+      sector: s.sector, profile: s.profile ?? null, coverage: s.coverage ?? null, scutNetworkIds: s.scutNetworkIds ?? [],
     }));
   }
 
@@ -191,6 +201,7 @@ export class DiscoveryTracker extends EventEmitter {
     this.state.sectors[k] = {
       sector: obs.relativeCoordinates, scannedAt: nowIso, knowledgeLevel: obs.knowledgeLevel, objects, error: null,
       resources, scutNetworkIds: (obs.scutNetworks ?? []).map((n) => n.id), coverage: obs.scutCoverageStatus ?? null,
+      profile: sectorProfile((obs.objects ?? []) as Array<Record<string, unknown>>),
     };
 
     // Only detailed scans list objects reliably; don't mark things gone on a weak scan.

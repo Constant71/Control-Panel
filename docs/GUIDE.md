@@ -20,7 +20,8 @@ behind each feature, see the [README](../README.md).
 12. [Console](#console)
 13. [System, debug export and updates](#system-debug-export-and-updates)
 14. [TV dashboard](#tv-dashboard)
-15. [Everyday recipes](#everyday-recipes)
+15. [Projector star map](#projector-star-map)
+16. [Everyday recipes](#everyday-recipes)
 
 ---
 
@@ -438,6 +439,41 @@ other sizes) with no buttons and no scrolling. It updates on its own and never s
 Lists that don't fit are cut off at the bottom; the number next to each heading is the full count. Confirm builds
 and moves from the normal pages. When the server updates itself, the TV page reloads within 5 minutes. If you set a
 panel password, the kiosk browser has to log in once like any other browser.
+
+## Projector star map
+
+Open `http://<your server>:8184/projector` full screen on the computer feeding your projector. It's a slowly
+turning 3D map of your empire on pure black, so on the wall only the stars show. It is view-only and never sends
+anything to the game.
+
+- **Bright warm stars** are visited sectors whose scan listed a star or solar system. Faint rings around them are
+  planets (one ring per planet, up to four).
+- **Small blue dots** are visited sectors with no star (or not scanned yet).
+- **Black disc with an orange ring** is a black hole. A **purple haze** is a dust cloud.
+- **Thin lines** join neighbouring sectors you've visited. **Teal lines** mean both sectors are on the same SCUT network.
+- **Small markers** next to a sector: teal diamond for a SCUT relay, purple dot for a deuterium refuel station,
+  cyan dot for a dormant construct, blinking red for a missile, and a duck for a duck-shaped asteroid.
+- **A pulsing cyan ring** is a potential blueprint you haven't read on the Discoveries page yet.
+- **Dashed circles** are unvisited neighbours that exploring probes have scanned. A red haze means the scan gives a
+  black-hole chance of 5% or more.
+- **Probes** are bright dots with their names. Hollow means out of SCUT range and gold diamonds are stations. A
+  probe on the move runs along a dashed line as a comet, with the time left until arrival.
+- The dashed ring is sector (0, 0, 0). The faint specks far behind everything are decoration only.
+- The bottom of the picture glows amber while there are warnings and pulses red when something is critical.
+
+Options go after a `?`, for example `/projector?brightness=0.6&flip=1`:
+
+| Option | What it does |
+| --- | --- |
+| `brightness=0.2` to `1` | Dims everything (default 1). |
+| `turn=8` | Minutes per full turn (default 4). `turn=0` stops it turning. |
+| `labels=0` | Hides probe names and countdowns. |
+| `flip=1` | Turns the picture upside down, for a ceiling-mounted projector. |
+| `mirror=1` | Mirrors it, for rear projection. |
+| `backdrop=0` | Hides the decorative background specks. |
+
+Unvisited neighbours only show while at least one probe has Explore on, since that's when the panel scans them.
+Like the TV page, it reloads itself after the server updates.
 
 ---
 

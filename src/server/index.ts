@@ -20,6 +20,7 @@ import type { AutomationSettings } from "../shared/automation.js";
 import type { AutoFixMode } from "../shared/problems.js";
 import type { PanelOrder } from "../shared/activity.js";
 import { flushStores, storageHealth } from "./store.js";
+import { buildStarMap } from "../shared/starmap.js";
 
 const config = loadConfig();
 const STARTED_AT = new Date().toISOString();
@@ -253,6 +254,21 @@ app.post<{ Body: { probeId?: number; target?: { x: number; y: number; z: number 
   }));
 app.post<{ Body: { probeId?: number } }>("/panel-api/stations/flee-cancel", async (req, reply) =>
   stationCall(reply, async () => (await stations.cancelFlee(Number(req.body?.probeId)), { ok: true, message: "Flee cancelled." })));
+
+// Projector star map (/projector): visited sectors, what scans found in them, scanned neighbours and probe moves.
+app.get("/panel-api/starmap", async () => {
+  const snap = poller.snapshot;
+  return buildStarMap({
+    visited: snap.visitedSectors,
+    knowledge: discovery.starMapKnowledge(),
+    neighbourScans: automation.neighbourScans(),
+    probes: snap.probes.map((p) => ({ summary: p.summary, detail: p.detail })),
+    stationIds: stations.stations.map((x) => x.probeId),
+    discoveries: discovery.discoveries(),
+    problemSeverities: fixer.problems.map((p) => p.severity),
+    now: Date.now(),
+  });
+});
 
 app.get("/panel-api/discoveries", async () => ({ discoveries: discovery.discoveries(), scans: discovery.scans() }));
 

@@ -421,6 +421,11 @@ export class Automation extends EventEmitter {
     this.emit("changed");
   }
 
+  /** Latest passive neighbour scans (GET /api/sector) of unvisited sectors, for the projector star map. */
+  neighbourScans(): Schemas["SectorObservation"][] {
+    return Object.values(this.scans).map((v) => v.sector).filter(Boolean);
+  }
+
   private planExplore(snapshot: Snapshot): ExploreResult {
     const r = planExploration({
       snapshot, settings: this.state.settings,
