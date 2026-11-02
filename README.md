@@ -305,6 +305,13 @@ A station never moves on its own. When it is in danger, its card on the Stations
 - **Stragglers:** an idle Hauler or Tanker left away from the station flies home once its Mannies are aboard and it has
   the fuel.
 
+## Miner role (stations)
+
+A group role for a probe that stays in the station's sector and mines what the station is short of (raw resource
+targets, most short first). Its containers become hand-off containers, and docked service hands them to the station
+once full, the same as a Hauler's. It never goes on trips, the station doesn't fuel it, and the regular mining
+automation leaves it alone. If nothing in the sector holds what's short, a Hauler trip fetches it instead.
+
 ## Station Tanker role
 
 A group role for a tanker whose only job is deuterium for its station (Merchant, 2026-11-02). The regular mining
