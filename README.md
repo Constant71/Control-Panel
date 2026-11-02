@@ -340,6 +340,13 @@ automation leaves it alone, and the station never fuels it.
   its tank is full, waits for every Manny, flies home and starts giving again.
 - If it ends up away from the station without a trip, it flies home once its Mannies are aboard.
 
+## TV dashboard
+
+`/tv` (or `#/tv`) is a view-only, no-scroll dashboard for a TV or kiosk browser, designed for 1920×1080 and
+scaled in `em` for other sizes (`src/web/TvView.tsx`, `src/web/tv.css`). It reads the same live state stream plus
+`/panel-api/crafting`, `/panel-api/stations` and `/panel-api/discoveries`, sends no orders, and reloads itself
+when `/panel-api/health` reports a new version.
+
 ## Debug export
 
 The System page has **Download debug export**: one JSON file (`GET /panel-api/diagnostics`) with the latest poll,
