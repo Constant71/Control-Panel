@@ -90,6 +90,14 @@ export function buildWorld() {
     1: [
       manny("mny_a1", "manny-1", {
         currentTask: "mining", taskProgressPercent: 55, taskStartTime: iso(-1_800_000), taskEstimatedEndTime: iso(1_500_000),
+        task: {
+          objectId: "asteroid-metal-1", resourceType: "metals", resourceTypes: ["metals"], targetAmount: 0.1, depositedAmount: 0,
+          depositedResources: [], extractedAmount: 0, extractedResources: [], availableResources: ["metals"],
+          resourceComposition: { deuterium: 0, metals: 1, ice: 0, carbon_compounds: 0 },
+          resourceProfile: { deuterium: 0, metals: 1, ice: 0, carbon_compounds: 0 }, miningTravelSeconds: 300,
+          target: { id: "asteroid-metal-1", type: "asteroid", name: "Metal 3b91", resourceTypes: ["metals"],
+            resourceAmounts: { deuterium: 0, metals: 2.9, ice: 0, carbon_compounds: 0 } },
+        } as unknown as S["Manny"]["task"],
         location: { type: "sector", sector: { relative: { x: 0, y: 0, z: 0 } } }, canReceiveOrders: false,
       }),
       manny("mny_a2", "manny-2", {

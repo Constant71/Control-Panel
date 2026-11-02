@@ -65,6 +65,9 @@ export interface AutomationLogEntry {
   at: string;
   actionId: string;
   label: string;
+  why?: string;
+  probeId?: number | null;
+  mannyId?: string | null;
   endpoint: string;
   dryRun: boolean;
   ok: boolean;

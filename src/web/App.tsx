@@ -9,6 +9,7 @@ import { ProblemsView } from "./ProblemsView";
 import { DiscoveriesView } from "./DiscoveriesView";
 import { AutomationView } from "./AutomationView";
 import { BuildsView } from "./BuildsView";
+import { describeManny, describeProbe } from "../shared/activity";
 
 type Route =
   | { view: "fleet" } | { view: "probe"; id: number } | { view: "map" } | { view: "missions" } | { view: "system" }
@@ -201,10 +202,12 @@ function ProbeCard({ p, isDefault, now }: { p: ProbeView; isDefault: boolean; no
               <Bar value={d.inventory.usedCapacity} max={d.inventory.capacity} />
             </>
           )}
+          <Row k="Doing" v={describeProbe(d, now).summary} />
           {d.movement && d.movement.status !== "arrived" && (
-            <Row k="Moving" v={`${label(d.movement.status)} → ${vec(d.movement.target)}, arrives ${until(d.movement.arrivalAt, now)}`} />
+            <Row k="Arrives" v={until(d.movement.arrivalAt, now)} />
           )}
           <Row k="Mannies" v={p.mannies ? `${p.mannies.length} (${busy} busy)` : "—"} />
+          {p.mannies && p.mannies.length > 0 && <div className="muted tiny taskmix">{taskMix(p.mannies)}</div>}
         </>
       ) : (
         <Row k="Sector" v={vec(d?.sector?.relative)} />
@@ -257,7 +260,8 @@ function ProbeDetail({ state, id, now }: { state: PanelState; id: number; now: n
               <button key={t} className={tab === t ? "on" : ""} onClick={() => setTab(t)}>{t}</button>
             ))}
           </div>
-          {tab === "mannies" && <MannyTable mannies={p.mannies ?? []} now={now} />}
+          {isFullProbe(d) && <ProbeActivity p={p} d={d} state={state} now={now} />}
+          {tab === "mannies" && <MannyTable p={p} state={state} now={now} />}
           {tab === "storage" && isFullProbe(d) && <Storage inv={d.inventory} />}
           {tab === "alerts" && <Alerts alerts={p.alerts ?? []} warnings={p.damageWarnings ?? []} />}
           {tab === "sector" && <SectorView sector={p.sector} />}
@@ -267,8 +271,37 @@ function ProbeDetail({ state, id, now }: { state: PanelState; id: number; now: n
   );
 }
 
-function MannyTable({ mannies, now }: { mannies: Schemas["Manny"][]; now: number }) {
+function taskMix(mannies: Schemas["Manny"][]): string {
+  const c = new Map<string, number>();
+  for (const m of mannies) c.set(label(m.currentTask), (c.get(label(m.currentTask)) ?? 0) + 1);
+  return [...c.entries()].sort((a, b) => b[1] - a[1]).map(([k, n]) => `${n} ${k}`).join(" · ");
+}
+
+function ProbeActivity({ p, d, state, now }: { p: ProbeView; d: Schemas["Probe"]; state: PanelState; now: number }) {
+  const act = describeProbe(d, now);
+  const planned = (state.planned ?? []).filter((x) => x.probeId === p.summary.id);
+  return (
+    <div className="card">
+      <strong>What {p.summary.name} is doing</strong>
+      <div>{act.summary}</div>
+      {act.details.map((x, i) => <div key={i} className="muted tiny">{x}</div>)}
+      {p.mannies && <div className="tiny mt">Mannies: {taskMix(p.mannies)}</div>}
+      <div className="tiny mt"><b>Panel's next refresh</b> {planned.length ? `(${planned.length})` : ""}</div>
+      {planned.length === 0 && <div className="muted tiny">Nothing planned for this probe.</div>}
+      <ul className="plain tiny">
+        {planned.map((x, i) => <li key={i}>{x.label}<div className="muted">{x.why}</div></li>)}
+      </ul>
+    </div>
+  );
+}
+
+function MannyTable({ p, state, now }: { p: ProbeView; state: PanelState; now: number }) {
+  const mannies = p.mannies ?? [];
   const [filter, setFilter] = useState<"all" | "attention" | "idle" | "busy">("all");
+  const ctx = {
+    objects: (p.sector?.objects ?? []) as Array<Record<string, unknown>>, probeName: p.summary.name, now,
+    probes: state.snapshot.probes.map((x) => ({ id: x.summary.id, name: x.summary.name })),
+  };
   const rows = mannies
     .map((m) => ({ m, flags: mannyFlags(m, now) }))
     .filter(({ m, flags }) =>
@@ -288,17 +321,15 @@ function MannyTable({ mannies, now }: { mannies: Schemas["Manny"][]; now: number
       <div className="table-wrap">
         <table>
           <thead>
-            <tr><th>Name</th><th>Task</th><th>Progress</th><th>Ends</th><th>Where</th><th>Cargo</th><th>Orders</th><th>Flags</th></tr>
+            <tr><th>Name</th><th>Doing</th><th>Progress</th><th>Where</th><th>Orders</th><th>Flags</th></tr>
           </thead>
           <tbody>
             {rows.map(({ m, flags }) => (
               <tr key={m.id} className={worst(flags) ?? ""}>
                 <td><strong>{m.name}</strong><div className="muted tiny">{m.id}</div></td>
-                <td>{label(m.currentTask)}</td>
+                <td className="doing"><Doing m={m} ctx={ctx} state={state} now={now} /></td>
                 <td>{m.currentTask ? <><Bar value={m.taskProgressPercent} max={100} /> {pct(m.taskProgressPercent)}</> : "—"}</td>
-                <td>{until(m.taskEstimatedEndTime, now)}</td>
                 <td>{m.location.type === "probe" ? "on probe" : `sector ${vec(m.location.sector?.relative)}`}</td>
-                <td className="tiny">{cargo(m.cargo)}</td>
                 <td>{m.canReceiveOrders ? "yes" : "no"}</td>
                 <td><FlagList flags={flags.filter((f) => f.code !== "idle")} /></td>
               </tr>
@@ -307,6 +338,31 @@ function MannyTable({ mannies, now }: { mannies: Schemas["Manny"][]; now: number
         </table>
       </div>
       {!rows.length && <p className="muted">No Mannies match.</p>}
+    </>
+  );
+}
+
+function Doing({ m, ctx, state, now }: { m: Schemas["Manny"]; ctx: Parameters<typeof describeManny>[1]; state: PanelState; now: number }) {
+  const act = describeManny(m, ctx);
+  const order = state.orders?.[m.id];
+  const next = state.planned?.find((x) => x.mannyId === m.id);
+  return (
+    <>
+      <div>{act.summary}</div>
+      {act.details.map((x, i) => <div key={i} className="muted tiny">{x}</div>)}
+      {order && (
+        <div className="tiny why">
+          Ordered by {order.by === "you" ? "you" : `the panel's ${order.by}`} {ago(order.at, now)}: {order.label}
+          {order.why && <div className="muted">Why: {order.why}</div>}
+        </div>
+      )}
+      {next && <div className="tiny info-text">Next refresh: {next.label}</div>}
+      {act.raw.length > 0 && (
+        <details className="tiny">
+          <summary>All task data from the API</summary>
+          <dl className="raw">{act.raw.map(([k, v]) => <div key={k}><dt>{k}</dt><dd>{v}</dd></div>)}</dl>
+        </details>
+      )}
     </>
   );
 }
@@ -405,9 +461,4 @@ function Missions({ missions }: { missions: Schemas["Mission"][] }) {
 const rank = (s: string | null) => (s === "critical" ? 3 : s === "warning" ? 2 : s === "info" ? 1 : 0);
 const round = (n: number) => Math.round(n * 10) / 10;
 export const vec = (v: { x: number; y: number; z: number } | undefined | null) => (v ? `(${v.x}, ${v.y}, ${v.z})` : "—");
-const cargo = (c: Schemas["MannyCargo"]) => {
-  const parts = [
-    ["D", c.deuterium], ["M", c.metals], ["I", c.ice], ["O", c.organicCompounds],
-  ].filter(([, v]) => (v as number) > 0).map(([k, v]) => `${k} ${(v as number).toFixed(3)}`);
-  return parts.length ? parts.join(" · ") : "empty";
-};
+

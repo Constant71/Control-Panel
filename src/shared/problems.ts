@@ -67,6 +67,9 @@ export interface FixLogEntry {
   label: string;
   endpoint: string;
   initiator: "auto" | "you";
+  /** Manny the fix gave an order to, if any. */
+  mannyId?: string | null;
+  why?: string;
   dryRun: boolean;
   ok: boolean;
   status: number | null;

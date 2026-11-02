@@ -140,6 +140,19 @@ refresh, so fixes always get first pick of idle Mannies.
   critical, because the Manny can be left behind. While the move is still
   preparing, it is auto-cancelled with `DELETE /api/probe/{id}/move`.
 
+### What each probe and Manny is doing
+
+The probe page shows what each probe and Manny is doing, in plain words, built
+from what the API returns:
+
+- **Manny tasks:** mining target, amount, split and travel time, plus what's left
+  on the asteroid; the 7-day storage-wait countdown; the parts a craft used; the
+  object being inspected or salvaged; time left.
+- **Probe moves:** route, phase, fuel reserved and arrival time.
+- **The panel's own orders:** who ordered it (automation, auto-fix, or you), when,
+  and why. Also shown is what the next refresh will do for that probe.
+- **Raw task fields:** "All task data from the API" lists every field.
+
 ## Develop
 
 ```bash

@@ -12,6 +12,7 @@ import { DiscoveryTracker } from "./discovery.js";
 import { Automation } from "./automation.js";
 import type { AutomationSettings } from "../shared/automation.js";
 import type { AutoFixMode } from "../shared/problems.js";
+import type { PanelOrder } from "../shared/activity.js";
 
 const config = loadConfig();
 if (!config.gameApiKey) {
@@ -46,6 +47,22 @@ poller.on("snapshot", (snapshot) => {
     .catch((err) => app.log.error(err, "post-poll hooks failed"));
 });
 
+/** Latest order the panel gave each Manny in the last day (automation, auto-fix, or you), with its reason. */
+function lastOrders(): Record<string, PanelOrder> {
+  const out: Record<string, PanelOrder & { t: number }> = {};
+  const cutoff = Date.now() - 86_400_000;
+  const add = (mannyId: string | null | undefined, o: PanelOrder) => {
+    const t = new Date(o.at).getTime();
+    if (!mannyId || t < cutoff || (out[mannyId] && out[mannyId].t >= t)) return;
+    out[mannyId] = { ...o, t };
+  };
+  for (const e of automation.log)
+    if (e.ok && !e.dryRun) add(e.mannyId, { at: e.at, by: e.actionId.startsWith("confirm:") ? "you" : "automation", label: e.label, why: e.why ?? "" });
+  for (const e of fixer.log)
+    if (e.ok && !e.dryRun) add(e.mannyId, { at: e.at, by: e.initiator === "you" ? "you" : "auto-fix", label: e.label, why: e.why ?? e.problemTitle });
+  return Object.fromEntries(Object.entries(out).map(([k, { t: _t, ...o }]) => [k, o]));
+}
+
 function panelState() {
   return {
     snapshot: poller.snapshot,
@@ -55,6 +72,10 @@ function panelState() {
     unreadDiscoveries: discovery.discoveries().filter((d) => !d.read && d.present).length,
     automationMode: automation.settings.mode,
     readySuggestions: automation.suggestions.filter((x) => x.ready).length,
+    orders: lastOrders(),
+    planned: automation.lastPlan.map((a) => ({
+      probeId: "probeId" in a.plan ? a.plan.probeId : null, mannyId: "mannyId" in a.plan ? a.plan.mannyId : null, label: a.label, why: a.why,
+    })),
   };
 }
 

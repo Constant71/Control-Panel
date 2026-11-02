@@ -474,6 +474,7 @@ export class Automation extends EventEmitter {
     const t = this.now();
     const entry: AutomationLogEntry = {
       at: new Date(t).toISOString(), actionId: a.id, label: a.label, endpoint: a.endpoint, dryRun, ok: true, status: null, code: null, message: null,
+      why: a.why, probeId: "probeId" in a.plan ? a.plan.probeId : null, mannyId: "mannyId" in a.plan ? a.plan.mannyId : null,
     };
     try {
       if (!dryRun) {
