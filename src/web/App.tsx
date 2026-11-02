@@ -7,16 +7,17 @@ import { SectorMap } from "./SectorMap";
 import { SystemView } from "./SystemView";
 import { ProblemsView } from "./ProblemsView";
 import { DiscoveriesView } from "./DiscoveriesView";
+import { AutomationView } from "./AutomationView";
 
 type Route =
   | { view: "fleet" } | { view: "probe"; id: number } | { view: "map" } | { view: "missions" } | { view: "system" }
-  | { view: "problems" } | { view: "discoveries" };
+  | { view: "problems" } | { view: "discoveries" } | { view: "automation" };
 
 function parseHash(): Route {
   const h = location.hash.replace(/^#\/?/, "");
   const [v, id] = h.split("/");
   if (v === "probe" && id) return { view: "probe", id: Number(id) };
-  if (v === "map" || v === "missions" || v === "system" || v === "problems" || v === "discoveries") return { view: v };
+  if (v === "map" || v === "missions" || v === "system" || v === "problems" || v === "discoveries" || v === "automation") return { view: v };
   return { view: "fleet" };
 }
 
@@ -51,6 +52,9 @@ export function App() {
           <a className={route.view === "discoveries" ? "on" : ""} href="#/discoveries">
             Discoveries{state && <Badge n={state.unreadDiscoveries} sev="info" />}
           </a>
+          <a className={route.view === "automation" ? "on" : ""} href="#/automation">
+            Automation{state && state.automationMode !== "auto" && <span className="badge warning">{state.automationMode === "off" ? "off" : "dry"}</span>}
+          </a>
           <a className={route.view === "map" ? "on" : ""} href="#/map">Map</a>
           <a className={route.view === "missions" ? "on" : ""} href="#/missions">Missions</a>
           <a className={route.view === "system" ? "on" : ""} href="#/system">System</a>
@@ -70,6 +74,8 @@ export function App() {
           <ProblemsView state={state} now={now} />
         ) : route.view === "discoveries" ? (
           <DiscoveriesView state={state} now={now} />
+        ) : route.view === "automation" ? (
+          <AutomationView state={state} now={now} />
         ) : route.view === "missions" ? (
           <Missions missions={state.snapshot.missions} />
         ) : (

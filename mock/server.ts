@@ -61,12 +61,12 @@ export function startMock(port = 0, opts: MockOpts = {}) {
       return json(200, { sector: world.visitedSectorObs(v) }, h);
     }
 
-    if (req.method === "POST") {
+    if (req.method === "POST" || req.method === "PATCH") {
       let raw = "";
       req.on("data", (c) => (raw += c));
       req.on("end", () => {
         const body = raw ? JSON.parse(raw) : null;
-        posts.push({ path: p, body });
+        posts.push({ path: (req.method === "PATCH" ? "PATCH " : "") + p, body });
         const failing = Object.entries(opts.fail ?? {}).find(([suffix]) => p.endsWith(suffix));
         if (failing) return json(failing[1].status, { error: { code: failing[1].code, message: "Mock rejection" } }, h);
         const mannyId = p.match(/mannies\/([^/]+)\//)?.[1] ?? body?.actorMannyId;

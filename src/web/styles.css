@@ -111,3 +111,10 @@ details summary { cursor: pointer; margin-bottom: 6px; }
   .mode { margin-left: 0; width: 100%; }
   .fixes li { flex-direction: column; }
 }
+
+/* Automation */
+.plain { list-style: none; padding: 0; margin: 6px 0 0; }
+.plain li { padding: 4px 0; border-bottom: 1px solid var(--line); }
+input.num { width: 80px; background: var(--panel2); color: var(--text); border: 1px solid var(--line); border-radius: 4px; padding: 3px 6px; font: inherit; text-align: right; }
+select { background: var(--panel2); color: var(--text); border: 1px solid var(--line); border-radius: 4px; padding: 3px 6px; font: inherit; }
+label.row { align-items: center; cursor: pointer; }

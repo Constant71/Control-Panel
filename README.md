@@ -91,6 +91,27 @@ Manny unlocks a probe improvement), newly learned blueprints
 abandoned Mannies, detached containers, drifting items, refuel stations and
 SCUT relays.
 
+## Step 3a: Automation (mining, constructs, naming)
+
+The Automation page (modes: auto, dry run, off) runs after the fixer on every
+refresh, so fixes always get first pick of idle Mannies.
+
+- **Mining** (`POST .../mine`): idle onboard Mannies mine whichever resource is
+  furthest below its per-probe stock target (metals, ice, carbon in ECE;
+  deuterium as % of tank). Targets come from the current sector's asteroids and
+  `minableTargets`. An order only goes out if storage still has room for
+  **every** Manny outside to dock plus its pending cargo (Manny size read from
+  `ProbeInventoryItem.containerSpace`). It keeps `keepIdle` Mannies free for
+  fixes and respects `maxMiners`. Moving or unreachable probes are skipped.
+- **Dormant constructs** (`POST .../inspect-sector-object`): inspected once each;
+  the spec says this unlocks a probe improvement.
+- **Naming** (off until you switch it on): probes `Role-NN` (`Station-Alpha`),
+  Mannies `<probe code>-MNN` (`H03-M07`), containers named from their routing
+  rules (`Core`, `Home · Mannies`, `Hand-off · Metals`, `Cargo · Ice`). A preview
+  shows every planned rename. You can lock names, at most 5 renames happen per
+  refresh, and "Revert all names" restores the originals (saved in
+  `/data/automation.json`).
+
 ## Develop
 
 ```bash
@@ -106,6 +127,6 @@ The mock (`mock/`) is typed against the generated schema too, so it can't drift 
 ## Roadmap
 
 1. Foundation and read-only live view
-2. Problems page with automatic fixes, fix log, discoveries (this)
-3. 24/7 automation rules (mining, crafting, repair, deuterium, storage, exploration within SCUT range, inspecting dormant constructs, probe-build suggestions, automatic naming)
+2. Problems page with automatic fixes, fix log, discoveries
+3. 24/7 automation: 3a mining, construct inspection, naming (this); 3b crafting and probe-build suggestions; 3c exploration. Rules (mining, crafting, repair, deuterium, storage, exploration within SCUT range, inspecting dormant constructs, probe-build suggestions, automatic naming)
 4. Remaining endpoints as manual controls, plus messaging, logbook and forum

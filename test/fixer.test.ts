@@ -7,8 +7,10 @@ import { Poller } from "../src/server/poller.ts";
 import { Fixer } from "../src/server/fixer.ts";
 import { detectProblems } from "../src/server/detect.ts";
 import { DiscoveryTracker } from "../src/server/discovery.ts";
+import { clearOrders } from "../src/server/orders.ts";
 
 async function setup(fail?: Record<string, { status: number; code: string }>) {
+  clearOrders();
   const mock = await startMock(0, { fail });
   const game = new Game(mock.url, "vng_mock", new RateLimiter(0.3));
   const poller = new Poller(game, { minIntervalMs: 1000, maxIntervalMs: 60_000 });
@@ -143,7 +145,7 @@ test("discoveries: scans visited sectors and flags potential blueprints", async 
     const d = new DiscoveryTracker(game, undefined, { scansPerCycle: 10, rescanMs: 3_600_000, blueprintCheckMs: 600_000 });
     await d.onSnapshot(poller.snapshot);
     const all = d.discoveries();
-    const construct = all.find((x) => x.kind === "dormant_construct");
+    const construct = all.find((x) => x.kind === "dormant_construct" && x.objectId === "construct-7");
     assert.ok(construct, "dormant construct found by scanning a visited sector");
     assert.deepEqual(construct.sector, { x: 2, y: 0, z: 0 });
     assert.equal(construct.read, false);
