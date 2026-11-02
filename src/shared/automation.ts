@@ -1,5 +1,6 @@
 /** Types shared by the automation engine and the UI. */
 import type { AutoFixMode } from "./problems.js";
+import type { CraftGoal } from "./crafting.js";
 
 export type Resource = "deuterium" | "metals" | "ice" | "carbon_compounds";
 export type ProbeRole = "Probe" | "Station" | "Hauler" | "Tanker" | "Scout" | "Miner";
@@ -21,6 +22,10 @@ export interface AutomationSettings {
   mode: AutoFixMode;
   inspectConstructs: boolean;
   naming: boolean;
+  /** Work through each probe's crafting queue. */
+  crafting: boolean;
+  /** Per-probe ordered crafting goals, keyed by probe id. */
+  craftQueue: Record<string, CraftGoal[]>;
   defaults: ProbeAutomationSettings;
   probes: Record<string, Partial<ProbeAutomationSettings>>;
   /** Entity keys ("probe:1", "manny:mny_x", "container:1:cid") never renamed. */
@@ -30,6 +35,10 @@ export interface AutomationSettings {
 export type AutomationPlan =
   | { kind: "mine"; probeId: number; mannyId: string; objectId: string; resources: Resource[]; targetAmount: number }
   | { kind: "inspect"; probeId: number; mannyId: string; objectId: string }
+  | { kind: "craft"; probeId: number; mannyId: string; recipe: string; output: string }
+  | { kind: "print"; probeId: number; mannyId: string; recipe: string; output: string }
+  | { kind: "assemble"; probeId: number; mannyId: string; model: "generic" | "deuterium_tanker"; containerIds: string[] }
+  | { kind: "improve"; probeId: number; mannyId: string; improvement: string }
   | { kind: "rename_probe"; probeId: number; name: string }
   | { kind: "rename_manny"; probeId: number; mannyId: string; name: string }
   | { kind: "rename_container"; probeId: number; containerId: string; label: string };

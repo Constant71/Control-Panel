@@ -20,6 +20,9 @@ import {
   type PlannedRename, type ProbeAutomationSettings, type Resource,
 } from "../shared/automation.js";
 import type { AutoFixMode } from "../shared/problems.js";
+import type { CraftGoal, GoalStatus, Suggestion, TrackedCraft } from "../shared/crafting.js";
+import { planCrafting, liveCrafts, type Recipe } from "./crafting.js";
+import { buildSuggestions } from "./builds.js";
 
 const MAX_ACTIONS_PER_CYCLE = 10;
 const MAX_RENAMES_PER_CYCLE = 5;
@@ -36,17 +39,26 @@ interface State {
   originalNames: Record<string, string>;
   failures: Record<string, string>; // actionId -> retry-after ISO
   log: AutomationLogEntry[];
+  recipes: Recipe[];
+  recipesAt: string | null;
+  crafts: TrackedCraft[];
 }
 
 const defaultState = (): State => ({
   settings: {
-    mode: "auto", inspectConstructs: true, naming: false, defaults: DEFAULT_PROBE_SETTINGS, probes: {}, lockedNames: [],
+    mode: "auto", inspectConstructs: true, naming: false, crafting: true, craftQueue: {}, defaults: DEFAULT_PROBE_SETTINGS, probes: {}, lockedNames: [],
   },
   inspected: [],
   originalNames: {},
   failures: {},
   log: [],
+  recipes: [],
+  recipesAt: null,
+  crafts: [],
 });
+
+const RECIPE_REFRESH_MS = 6 * 3600_000;
+const IMPROVEMENTS_REFRESH_MS = 30 * 60_000;
 
 type Obj = Record<string, unknown> & { id?: string; type?: string; name?: string };
 
@@ -71,16 +83,23 @@ export interface PlanInput {
   settings: AutomationSettings;
   inspected: Set<string>;
   busy: Set<string>;
+  recipes?: Recipe[];
+  crafts?: TrackedCraft[];
 }
 
 /** Pure planner: what the automation would do right now. */
-export function planAutomation({ snapshot, settings, inspected, busy }: PlanInput): AutomationAction[] {
+export function planAutomation(input: PlanInput): AutomationAction[] {
+  return planAll(input).actions;
+}
+
+export function planAll({ snapshot, settings, inspected, busy, recipes = [], crafts = [] }: PlanInput): { actions: AutomationAction[]; crafting: GoalStatus[] } {
   const actions: AutomationAction[] = [];
+  const crafting: GoalStatus[] = [];
   for (const v of snapshot.probes) {
     if (!v.summary.isReachable || !isFullProbe(v.detail) || !v.mannies) continue;
     const p = v.detail;
     const moving = !!p.movement && !["arrived", "failed", "destroyed"].includes(p.movement.status);
-    if (moving || ["dead", "disabled", "trapped_by_black_hole"].includes(p.status)) continue;
+    if (["dead", "disabled", "trapped_by_black_hole"].includes(p.status)) continue;
     const cfg = settingsFor(settings, p.id);
     const idle = v.mannies.filter((m) => m.location.type === "probe" && m.currentTask === null && m.canReceiveOrders && !busy.has(m.id));
     let spare = idle.length - cfg.keepIdle;
@@ -93,8 +112,14 @@ export function planAutomation({ snapshot, settings, inspected, busy }: PlanInpu
     };
     const objects = (v.sector?.objects ?? []) as Obj[];
 
+    const inv = p.inventory;
+    const mannySpace = Math.max(0, ...(inv?.items ?? []).filter((i) => i.type === "manny").map((i) => i.containerSpace)) || FALLBACK_MANNY_SPACE;
+    const outside = v.mannies.filter((m) => m.location.type === "sector");
+    // Reserve room for every Manny outside plus its pending cargo (conservative: assume not yet counted).
+    const room = { free: (inv?.freeCapacity ?? 0) - outside.reduce((sum, m) => sum + mannySpace + pendingCargo(m), 0) };
+
     // 1. Dormant constructs → inspect (spec: unlocks one probe improvement).
-    if (settings.inspectConstructs) {
+    if (settings.inspectConstructs && !moving) {
       for (const o of objects) {
         if (o.type !== "dormant_construct" || !o.id || inspected.has(o.id) || o.inspectable === false) continue;
         const already = v.mannies.some((m) => m.currentTask === "inspecting_sector_object" && taskOf(m).objectId === o.id);
@@ -110,17 +135,29 @@ export function planAutomation({ snapshot, settings, inspected, busy }: PlanInpu
       }
     }
 
-    // 2. Mining toward stock targets, only with room for every Manny to come home.
-    if (!cfg.mining) continue;
+    // 2. Crafting queue (onboard work, so it also runs while the probe moves).
+    const short: Record<Resource, number> = { deuterium: 0, metals: 0, ice: 0, carbon_compounds: 0 };
+    const goals = settings.craftQueue?.[String(p.id)] ?? [];
+    if (goals.length && inv) {
+      const on = settings.crafting !== false;
+      // Paused: still show the plan, but hand out no Mannies.
+      const res = planCrafting({ view: v, probe: p, recipes, goals, tracked: crafts, take: on ? take : () => null, room });
+      crafting.push(...res.statuses);
+      if (on) {
+        actions.push(...res.actions);
+        Object.assign(short, res.shortfalls);
+      } else {
+        for (const st of res.statuses) for (const step of st.steps) if (step.status === "needs_manny") step.detail = "Crafting is paused.";
+      }
+    }
+
+    // 3. Mining toward stock targets (plus crafting shortfalls), only with room for every Manny to come home.
+    if (!cfg.mining || moving) continue;
     const targets = mineableTargets(v.sector);
     if (!targets.length) continue;
-    const inv = p.inventory;
     if (!inv) continue;
-    const mannySpace = Math.max(0, ...inv.items.filter((i) => i.type === "manny").map((i) => i.containerSpace)) || FALLBACK_MANNY_SPACE;
-    const outside = v.mannies.filter((m) => m.location.type === "sector");
     const miners = v.mannies.filter((m) => m.currentTask === "mining");
-    // Reserve room for every Manny outside plus its pending cargo (conservative: assume not yet counted).
-    let free = inv.freeCapacity - outside.reduce((sum, m) => sum + mannySpace + pendingCargo(m), 0);
+    let free = room.free;
 
     const stock: Record<Resource, number> = { deuterium: 0, metals: 0, ice: 0, carbon_compounds: 0 };
     for (const s of inv.resourceStocks) stock[s.type] = s.amount;
@@ -136,12 +173,13 @@ export function planAutomation({ snapshot, settings, inspected, busy }: PlanInpu
       r === "deuterium"
         ? ((cfg.targets.deuteriumPercent / 100) * max - p.fuel.deuterium) * 0.01 - pending.deuterium // 0.01 ECE = 1 tank point
         : cfg.targets[r] - stock[r] - pending[r];
+    const needAll = (r: Resource): number => need(r) + short[r];
 
     let slots = cfg.maxMiners - miners.length;
     const remaining = new Map(targets.map((t) => [t.id, { ...(t.resourceAmounts ?? { deuterium: 0, metals: 0, ice: 0, carbon_compounds: 0 }) }]));
     while (slots > 0 && spare > 0) {
       const wanted = (["deuterium", "metals", "ice", "carbon_compounds"] as Resource[])
-        .map((r) => ({ r, n: need(r) }))
+        .map((r) => ({ r, n: needAll(r) }))
         .filter((x) => x.n >= 0.01)
         .sort((a, b) => b.n - a.n)[0];
       if (!wanted) break;
@@ -166,13 +204,13 @@ export function planAutomation({ snapshot, settings, inspected, busy }: PlanInpu
       actions.push({
         id: `mine:${p.id}:${m.id}`,
         label: `${m.name} mines ${amount} ECE ${r.replace("_", " ")} from ${target.name ?? target.id}`,
-        why: `${r.replace("_", " ")} is furthest below target. ${Math.ceil(amount / TRIP)} trip(s); room is kept for every Manny outside to dock.`,
+        why: `${r.replace("_", " ")} is furthest below target${short[r] > 0 ? " (includes what the crafting queue needs)" : ""}. ${Math.ceil(amount / TRIP)} trip(s); room is kept for every Manny outside to dock.`,
         endpoint: `POST /api/probe/${p.id}/mannies/${m.id}/mine`,
         plan: { kind: "mine", probeId: p.id, mannyId: m.id, objectId: target.id, resources: [r], targetAmount: amount },
       });
     }
   }
-  return actions;
+  return { actions, crafting };
 }
 
 function taskOf(m: Schemas["Manny"]): Record<string, unknown> {
@@ -194,6 +232,11 @@ export class Automation extends EventEmitter {
   private readonly store: JsonStore<State>;
   lastPlan: AutomationAction[] = [];
   renames: PlannedRename[] = [];
+  crafting: GoalStatus[] = [];
+  suggestions: Suggestion[] = [];
+  improvements: Record<string, Schemas["ProbeImprovement"][]> = {};
+  private improvementsAt: Record<string, number> = {};
+  private lastSnapshot: Snapshot | null = null;
 
   constructor(private readonly game: Game, dataDir: string | undefined, private readonly onActed: () => void, private readonly now = Date.now) {
     super();
@@ -203,7 +246,10 @@ export class Automation extends EventEmitter {
   async load(): Promise<void> {
     const loaded = await this.store.load();
     const d = defaultState();
-    this.state = { ...loaded, settings: { ...d.settings, ...loaded.settings, defaults: { ...d.settings.defaults, ...loaded.settings?.defaults } } };
+    this.state = {
+      ...d, ...loaded,
+      settings: { ...d.settings, ...loaded.settings, defaults: { ...d.settings.defaults, ...loaded.settings?.defaults } },
+    };
   }
 
   get settings(): AutomationSettings {
@@ -215,12 +261,125 @@ export class Automation extends EventEmitter {
   get originalNames(): Record<string, string> {
     return this.state.originalNames;
   }
+  get recipes(): Recipe[] {
+    return this.state.recipes;
+  }
+
+  /** Replaces one probe's crafting queue (order = priority). */
+  async setQueue(probeId: number, goals: Array<Partial<CraftGoal>>): Promise<CraftGoal[]> {
+    const known = new Set(this.state.recipes.map((r) => r.output.type as string));
+    const clean: CraftGoal[] = [];
+    for (const g of goals) {
+      const item = String(g.item ?? "");
+      const quantity = Math.round(Number(g.quantity));
+      if (!item || (known.size && !known.has(item)) || !Number.isFinite(quantity) || quantity < 1 || quantity > 1000) continue;
+      clean.push({
+        id: typeof g.id === "string" && g.id ? g.id : `g${this.now().toString(36)}${Math.random().toString(36).slice(2, 6)}`,
+        item, quantity, once: !!g.once, note: g.note ? String(g.note).slice(0, 120) : undefined,
+        addedAt: typeof g.addedAt === "string" ? g.addedAt : new Date(this.now()).toISOString(),
+      });
+    }
+    this.state.settings.craftQueue[String(probeId)] = clean;
+    await this.store.save(this.state);
+    this.replan();
+    return clean;
+  }
+
+  /** Adds goals for every part a suggestion is missing (one-off goals, merged with existing ones). */
+  async queueMissing(suggestionId: string): Promise<CraftGoal[] | null> {
+    const sug = this.suggestions.find((x) => x.id === suggestionId);
+    if (!sug) return null;
+    const goals = [...(this.state.settings.craftQueue[String(sug.probeId)] ?? [])];
+    const v = this.lastSnapshot?.probes.find((x) => x.summary.id === sug.probeId);
+    const containersNow = isFullProbe(v?.detail ?? null) ? ((v!.detail as Schemas["Probe"]).inventory?.containers.filter((c) => c.kind === "container").length ?? 0) : 0;
+    for (const line of sug.consumes) {
+      if (["deuterium", "metals", "ice", "carbon_compounds"].includes(line.item)) continue; // mining covers resources
+      // Assembly needs *empty* containers, so ask for that many on top of the ones in use.
+      const target = line.item === "additional_container" ? containersNow + (line.need - line.have) : Math.ceil(line.need);
+      if (line.have >= line.need) continue;
+      const existing = goals.find((g) => g.item === line.item);
+      if (existing) existing.quantity = Math.max(existing.quantity, target);
+      else goals.push({ id: "", item: line.item, quantity: target, once: true, note: sug.title, addedAt: "" });
+    }
+    return this.setQueue(sug.probeId, goals);
+  }
+
+  /** Runs a build suggestion after Merchant confirmed it. Re-checked against the latest refresh first. */
+  async confirmSuggestion(id: string): Promise<AutomationLogEntry> {
+    this.replan();
+    const sug = this.suggestions.find((x) => x.id === id);
+    const fail = (message: string): AutomationLogEntry => {
+      const e: AutomationLogEntry = { at: new Date(this.now()).toISOString(), actionId: id, label: sug?.title ?? id, endpoint: sug?.endpoint ?? "", dryRun: false, ok: false, status: null, code: "not_ready", message };
+      this.state.log.push(e);
+      return e;
+    };
+    if (!sug) return fail("This suggestion no longer applies.");
+    if (!sug.ready || !sug.mannyId) return fail(sug.blockers.join(" ") || "Not ready.");
+    const plan: AutomationPlan = sug.kind === "assemble_probe"
+      ? { kind: "assemble", probeId: sug.probeId, mannyId: sug.mannyId, model: sug.model!, containerIds: sug.containerIds }
+      : { kind: "improve", probeId: sug.probeId, mannyId: sug.mannyId, improvement: sug.improvement! };
+    const action: AutomationAction = { id: `confirm:${id}`, label: `${sug.mannyName}: ${sug.title} (confirmed)`, why: sug.why.join(" "), endpoint: endpointOf(plan), plan };
+    await this.execute(action, false);
+    delete this.state.failures[action.id]; // a confirmed action can be retried right away
+    if (sug.kind === "install_improvement") delete this.improvementsAt[String(sug.probeId)];
+    await this.store.save(this.state);
+    this.emit("changed");
+    this.onActed();
+    return this.state.log[this.state.log.length - 1];
+  }
+
+  /** Probes the panel must not move: a Manny is assembling a probe there (spec: leaving strands it). */
+  holds(snapshot: Snapshot): Array<{ probeId: number; mannyId: string; until: string | null }> {
+    const out: Array<{ probeId: number; mannyId: string; until: string | null }> = [];
+    for (const v of snapshot.probes)
+      for (const m of v.mannies ?? []) if (m.currentTask === "assembling_probe") out.push({ probeId: v.summary.id, mannyId: m.id, until: m.taskEstimatedEndTime });
+    return out;
+  }
+
+  private replan(): void {
+    if (!this.lastSnapshot) return;
+    const busy = recentlyOrdered(this.now());
+    const r = planAll({
+      snapshot: this.lastSnapshot, settings: this.state.settings, inspected: new Set(this.state.inspected), busy,
+      recipes: this.state.recipes, crafts: this.state.crafts,
+    });
+    this.lastPlan = r.actions;
+    this.crafting = r.crafting;
+    this.suggestions = buildSuggestions({ snapshot: this.lastSnapshot, improvements: this.improvements, busy: recentlyOrdered(this.now()) });
+    this.emit("changed");
+  }
+
+  private async refreshReference(snapshot: Snapshot): Promise<void> {
+    const t = this.now();
+    if (!this.state.recipesAt || t - new Date(this.state.recipesAt).getTime() > RECIPE_REFRESH_MS || !this.state.recipes.length) {
+      try {
+        const res = unwrap(await this.game.poll.GET("/api/crafting-recipes", {}));
+        this.state.recipes = res.recipes;
+        this.state.recipesAt = new Date(t).toISOString();
+      } catch {
+        /* keep the cached list; retried next refresh */
+      }
+    }
+    for (const v of snapshot.probes) {
+      if (!v.summary.isReachable) continue;
+      const key = String(v.summary.id);
+      if (t - (this.improvementsAt[key] ?? 0) < IMPROVEMENTS_REFRESH_MS) continue;
+      try {
+        const res = unwrap(await this.game.poll.GET("/api/probe/{probeId}/probe-improvements-available", { params: { path: { probeId: v.summary.id } } }));
+        this.improvements[key] = res.improvements;
+        this.improvementsAt[key] = t;
+      } catch {
+        this.improvementsAt[key] = t - IMPROVEMENTS_REFRESH_MS + 5 * 60_000; // retry in 5 minutes
+      }
+    }
+  }
 
   async updateSettings(patch: Partial<AutomationSettings>): Promise<AutomationSettings> {
     const s = this.state.settings;
     if (patch.mode && ["auto", "dry_run", "off"].includes(patch.mode)) s.mode = patch.mode as AutoFixMode;
     if (typeof patch.inspectConstructs === "boolean") s.inspectConstructs = patch.inspectConstructs;
     if (typeof patch.naming === "boolean") s.naming = patch.naming;
+    if (typeof patch.crafting === "boolean") s.crafting = patch.crafting;
     if (patch.defaults) s.defaults = sanitize({ ...s.defaults, ...patch.defaults, targets: { ...s.defaults.targets, ...(patch.defaults.targets ?? {}) } });
     const ROLES = ["Probe", "Station", "Hauler", "Tanker", "Scout", "Miner"];
     if (patch.probes)
@@ -237,8 +396,20 @@ export class Automation extends EventEmitter {
   async onSnapshot(snapshot: Snapshot): Promise<void> {
     const t = this.now();
     const s = this.state.settings;
+    this.lastSnapshot = snapshot;
+    await this.refreshReference(snapshot);
+    this.state.crafts = liveCrafts(this.state.crafts, snapshot.probes, t);
     const busy = recentlyOrdered(t);
-    this.lastPlan = planAutomation({ snapshot, settings: s, inspected: new Set(this.state.inspected), busy });
+    const all = planAll({ snapshot, settings: s, inspected: new Set(this.state.inspected), busy, recipes: this.state.recipes, crafts: this.state.crafts });
+    this.lastPlan = all.actions;
+    this.crafting = all.crafting;
+    // One-off goals that are reached leave the queue.
+    for (const st of all.crafting)
+      if (st.done && st.goal.once) {
+        const q = s.craftQueue[String(st.probeId)];
+        if (q) s.craftQueue[String(st.probeId)] = q.filter((g) => g.id !== st.goal.id);
+      }
+    this.suggestions = buildSuggestions({ snapshot, improvements: this.improvements, busy: new Set(busy) });
     this.renames = planRenames(snapshot, (id) => settingsFor(s, id).role, new Set(s.lockedNames));
 
     let acted = false;
@@ -309,6 +480,8 @@ export class Automation extends EventEmitter {
         entry.status = await this.call(a.plan);
         if ("mannyId" in a.plan && a.plan.kind !== "rename_manny") markOrdered(a.plan.mannyId, t);
         if (a.plan.kind === "inspect") this.state.inspected.push(a.plan.objectId);
+        if (a.plan.kind === "craft" || a.plan.kind === "print")
+          this.state.crafts.push({ probeId: a.plan.probeId, mannyId: a.plan.mannyId, recipe: a.plan.recipe, output: a.plan.output, at: new Date(t).toISOString() });
       } else entry.message = "Dry run: not sent.";
       delete this.state.failures[a.id];
       return true;
@@ -337,6 +510,30 @@ export class Automation extends EventEmitter {
       case "inspect":
         r = await c.POST("/api/probe/{probeId}/mannies/{mannyId}/inspect-sector-object", {
           params: { path: { probeId: plan.probeId, mannyId: plan.mannyId } }, body: { objectId: plan.objectId },
+        });
+        break;
+      case "craft":
+        r = await c.POST("/api/probe/{probeId}/mannies/{mannyId}/craft", {
+          params: { path: { probeId: plan.probeId, mannyId: plan.mannyId } },
+          body: { recipe: plan.recipe as Schemas["MannyCraftRequest"]["recipe"] },
+        });
+        break;
+      case "print":
+        r = await c.POST("/api/probe/{probeId}/atomic-printer/craft", {
+          params: { path: { probeId: plan.probeId } },
+          body: { recipe: plan.recipe as Schemas["AtomicPrinterCraftRequest"]["recipe"], mannyId: plan.mannyId },
+        });
+        break;
+      case "assemble":
+        r = await c.POST("/api/probe/{probeId}/mannies/{mannyId}/assemble-probe", {
+          params: { path: { probeId: plan.probeId, mannyId: plan.mannyId } },
+          body: { model: plan.model, containerIds: plan.containerIds },
+        });
+        break;
+      case "improve":
+        r = await c.POST("/api/probe/{probeId}/mannies/{mannyId}/improve-probe", {
+          params: { path: { probeId: plan.probeId, mannyId: plan.mannyId } },
+          body: { improvement: plan.improvement as Schemas["MannyProbeImprovementRequest"]["improvement"] },
         });
         break;
       case "rename_probe":
@@ -371,6 +568,10 @@ function endpointOf(plan: AutomationPlan): string {
   switch (plan.kind) {
     case "mine": return `POST /api/probe/${plan.probeId}/mannies/${plan.mannyId}/mine`;
     case "inspect": return `POST /api/probe/${plan.probeId}/mannies/${plan.mannyId}/inspect-sector-object`;
+    case "craft": return `POST /api/probe/${plan.probeId}/mannies/${plan.mannyId}/craft`;
+    case "print": return `POST /api/probe/${plan.probeId}/atomic-printer/craft`;
+    case "assemble": return `POST /api/probe/${plan.probeId}/mannies/${plan.mannyId}/assemble-probe`;
+    case "improve": return `POST /api/probe/${plan.probeId}/mannies/${plan.mannyId}/improve-probe`;
     case "rename_probe": return `PATCH /api/probe/${plan.probeId}`;
     case "rename_manny": return `PATCH /api/probe/${plan.probeId}/mannies/${plan.mannyId}`;
     case "rename_container": return `PATCH /api/probe/${plan.probeId}/storage-containers/${plan.containerId}`;

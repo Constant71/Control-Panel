@@ -118,3 +118,21 @@ details summary { cursor: pointer; margin-bottom: 6px; }
 input.num { width: 80px; background: var(--panel2); color: var(--text); border: 1px solid var(--line); border-radius: 4px; padding: 3px 6px; font: inherit; text-align: right; }
 select { background: var(--panel2); color: var(--text); border: 1px solid var(--line); border-radius: 4px; padding: 3px 6px; font: inherit; }
 label.row { align-items: center; cursor: pointer; }
+
+/* Builds (step 3b) */
+.card.ready { border-color: var(--good); }
+.kit { display: flex; flex-wrap: wrap; gap: 4px; margin-top: 4px; }
+.kitline { font-size: 11px; padding: 2px 6px; border-radius: 4px; border: 1px solid var(--line); }
+.kitline.have { color: var(--good); }
+.kitline.short { color: var(--warn); border-color: var(--warn); }
+.actions { display: flex; gap: 6px; flex-wrap: wrap; }
+button.primary { background: var(--accent); color: #031018; border-color: var(--accent); }
+.spacer { flex: 1; }
+.steps { list-style: none; margin: 6px 0 0; padding: 0; }
+.steps li { padding: 2px 0; }
+.tag.st-starting, .tag.st-in_progress { color: var(--good); }
+.tag.st-needs_resources, .tag.st-no_room, .tag.st-no_printer, .tag.st-no_recipe { color: var(--warn); }
+.addgoal { display: flex; gap: 6px; flex-wrap: wrap; align-items: center; margin-top: 6px; }
+.addgoal select, .addgoal input[type=number] { background: var(--panel2); color: var(--text); border: 1px solid var(--line); border-radius: 6px; padding: 5px 8px; font: inherit; }
+.addgoal input[type=number] { width: 80px; }
+details summary { cursor: pointer; }
