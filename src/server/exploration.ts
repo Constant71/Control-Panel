@@ -241,5 +241,9 @@ export function scoreTarget(target: Vec, scan: Schemas["SectorObservation"] | un
 }
 
 export function exploringProbes(snapshot: Snapshot, settings: AutomationSettings): ProbeView[] {
-  return snapshot.probes.filter((v) => settingsFor(settings, v.summary.id).explore && v.summary.isReachable && isFullProbe(v.detail));
+  // A station never moves on its own (Stations design): it is skipped even with Explore on.
+  return snapshot.probes.filter((v) => {
+    const cfg = settingsFor(settings, v.summary.id);
+    return cfg.explore && cfg.role !== "Station" && v.summary.isReachable && isFullProbe(v.detail);
+  });
 }

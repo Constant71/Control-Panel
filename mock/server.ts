@@ -52,7 +52,7 @@ export function startMock(port = 0, opts: MockOpts = {}) {
     const h = rl(limit - hits.length);
 
     if (p === "/api/me") return json(200, { player: { id: 1, username: "mock", displayName: "Mock", forumAdmin: false, forumModerator: false } }, h);
-    if (p === "/api/probes") return json(200, { defaultProbeId: 1, probes: world.summaries }, h);
+    if (p === "/api/probes") return json(200, { defaultProbeId: world.summaries.find((x) => x.isDefault)?.id ?? null, probes: world.summaries }, h);
     if (p === "/api/probe/missions") return json(200, { missions: world.missions }, h);
     const page = { limit: 50, offset: 0, total: 0 };
     if (req.method === "GET" && p === "/api/forum/categories") return json(200, { categories: world.forum.categories }, h);
@@ -89,6 +89,13 @@ export function startMock(port = 0, opts: MockOpts = {}) {
         posts.push({ path: (req.method === "PATCH" ? "PATCH " : "") + p, body });
         const failing = Object.entries(opts.fail ?? {}).find(([suffix]) => p.endsWith(suffix));
         if (failing) return json(failing[1].status, { error: { code: failing[1].code, message: "Mock rejection" } }, h);
+        const pp = req.method === "PATCH" ? p.match(/^\/api\/probe\/(\d+)$/) : null;
+        if (pp && body?.isDefault === true) {
+          const target = world.summaries.find((x) => x.id === Number(pp[1]));
+          if (!target || !target.isReachable) return json(422, { error: { code: "probes_not_in_same_scut_network", message: "Target probe is outside reach." } }, h);
+          for (const x of world.summaries) x.isDefault = x.id === target.id;
+          return json(200, { defaultProbeId: target.id, probes: world.summaries }, h);
+        }
         const mannyId = p.match(/mannies\/([^/]+)\//)?.[1] ?? body?.actorMannyId;
         const manny = Object.values(world.mannies).flat().find((m) => m.id === mannyId) ?? Object.values(world.mannies).flat()[0];
         return json(202, { manny, inventory: world.probes[0].inventory }, h);

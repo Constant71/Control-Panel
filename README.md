@@ -202,6 +202,25 @@ then works like this:
   - Unread messages are checked every 5 minutes and shown as a nav badge.
 - **Alerts tab** on each probe: mark read, mark all read, delete alerts and damage warnings.
 
+## Step 5a: Stations (designation, groups, stock against targets)
+
+A station is a probe the panel keeps in place as a production hub, with its own group of probes. The game has no
+stations, so this is panel-only data (`data/stations.json`). It only changes which calls the panel makes.
+
+- **Make a probe a station** on the Stations page or on the probe page. Its role becomes Station (naming follows),
+  and exploration never moves it, even with Explore switched on.
+- **Group and roles.** Each group probe gets a role: Hauler, Tanker or Scout. A probe belongs to one station at most.
+  A role only changes while the probe is in reach. A probe that appears in a station's sector (for example one
+  just assembled there) joins that group with no role until you pick one.
+- **Make default probe** calls `PATCH /api/probe/{id}` with `isDefault: true`, behind a confirm dialog. The game refuses
+  (422) unless the station and the current default probe share a sector or an active SCUT network.
+- **Stock against targets:** resource floors (ECE), item floors (count), the station's fuel floor and its Manny count,
+  read from the station's inventory. Each station also has a Manny target per role.
+- **Checks** on each card: in reach, default probe, SCUT network, moving, fuel floor, group probes out of reach or
+  without a role.
+
+Production, hand-offs, dispatch trips, flee cards and station stuck fixes follow in 5b to 5e.
+
 ## Develop
 
 ```bash
@@ -219,5 +238,6 @@ The mock (`mock/`) is typed against the generated schema too, so it can't drift 
 1. Foundation and read-only live view
 2. Problems page with automatic fixes, fix log, discoveries
 3. 24/7 automation: 3a mining, construct inspection, naming; 3b crafting and probe-build suggestions; 3c exploration. Rules (mining, crafting, repair, deuterium, storage, exploration within SCUT range, inspecting dormant constructs, probe-build suggestions, automatic naming)
-4. Remaining endpoints as manual controls, plus messaging, logbook and forum (this)
-5. Stations (from the Stations design)
+4. Remaining endpoints as manual controls, plus messaging, logbook and forum
+5. Stations (from the Stations design): 5a designation, groups and stock targets (this); 5b container hand-offs and
+   refuelling while docked; 5c dispatch loop and hauler trips; 5d production modes; 5e flee cards and stuck fixes

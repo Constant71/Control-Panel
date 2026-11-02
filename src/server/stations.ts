@@ -1,0 +1,350 @@
+/**
+ * Stations, step 5a: designation, group membership with roles, and a read-only
+ * status of stock against targets. Nothing about stations is sent to the game; the
+ * only game call here is PATCH /api/probe/{id} {isDefault: true}, made when Merchant
+ * presses "Make default probe" (the spec requires both probes in the same sector or
+ * the same active SCUT network, else 422).
+ */
+import { EventEmitter } from "node:events";
+import type { Snapshot, ProbeView } from "./poller.js";
+import { Game, GameError, unwrap, type Schemas } from "./gameClient.js";
+import { JsonStore } from "./store.js";
+import { stockOf } from "./crafting.js";
+import { isFullProbe } from "../shared/attention.js";
+import type { ProbeRole } from "../shared/automation.js";
+import {
+  DEFAULT_STATION, MEMBER_ROLES, type Check, type MemberRole, type MemberStatus, type StationConfig, type StationLogEntry,
+  type StationMode, type StationStatus, type StationsData, type StockTarget, type TargetStatus,
+} from "../shared/stations.js";
+
+type Vec = { x: number; y: number; z: number };
+const RES_LABEL: Record<string, string> = { metals: "Metals", ice: "Ice", carbon_compounds: "Carbon compounds", deuterium: "Deuterium" };
+const MODES: StationMode[] = ["parts", "manny_factory", "probe_yard"];
+const MAX_LOG = 500;
+
+interface StoredData extends StationsData {
+  /** Probe ids seen so far, so a newly assembled probe can join the station it was built at. */
+  knownProbes: number[] | null;
+}
+
+export class StationError extends Error {
+  constructor(readonly status: number, message: string) {
+    super(message);
+  }
+}
+
+export function sectorOf(v: ProbeView | undefined): Vec | null {
+  return (v?.detail?.sector?.relative as Vec | undefined) ?? null;
+}
+
+const same = (a: Vec | null, b: Vec | null) => !!a && !!b && a.x === b.x && a.y === b.y && a.z === b.z;
+const round = (n: number, d = 2) => Math.round(n * 10 ** d) / 10 ** d;
+
+function fuelPercent(p: Schemas["Probe"]): number {
+  const max = p.fuel.maxDeuterium ?? (p.model === "deuterium_tanker" ? 400 : 100);
+  return max > 0 ? round((p.fuel.deuterium / max) * 100, 0) : 0;
+}
+
+function moving(p: Schemas["Probe"]): boolean {
+  return !!p.movement || ["preparing", "accelerating", "cruising", "decelerating"].includes(p.status);
+}
+
+function targetKey(t: StockTarget): string {
+  return t.kind === "resource" ? `resource:${t.resource}` : `item:${t.item}`;
+}
+
+function sanitizeTargets(raw: unknown): StockTarget[] {
+  if (!Array.isArray(raw)) return [];
+  const out: StockTarget[] = [];
+  const seen = new Set<string>();
+  for (const r of raw as Array<Record<string, unknown>>) {
+    const min = Number(r?.min);
+    if (!Number.isFinite(min) || min < 0 || min > 1e6) continue;
+    let t: StockTarget | null = null;
+    if (r.kind === "resource" && typeof r.resource === "string" && RES_LABEL[r.resource]) t = { kind: "resource", resource: r.resource as never, min };
+    if (r.kind === "item" && typeof r.item === "string" && /^[a-z0-9_]{1,64}$/.test(r.item)) t = { kind: "item", item: r.item, min: Math.floor(min) };
+    if (t && !seen.has(targetKey(t))) {
+      seen.add(targetKey(t));
+      out.push(t);
+    }
+  }
+  return out;
+}
+
+const clamp = (v: unknown, lo: number, hi: number, dflt: number) => {
+  const n = Number(v);
+  return Number.isFinite(n) ? Math.min(hi, Math.max(lo, Math.round(n))) : dflt;
+};
+
+/** Read-only picture of every station: stock against targets, group, and readiness checks. */
+export function stationStatus(snapshot: Snapshot, data: StationsData): StationStatus[] {
+  const views = new Map(snapshot.probes.map((v) => [v.summary.id, v]));
+  return data.stations.map((cfg) => {
+    const v = views.get(cfg.probeId);
+    const p = v && isFullProbe(v.detail) ? v.detail : null;
+    const sector = sectorOf(v);
+    const stock = p ? stockOf(p, v!.mannies) : null;
+    const targets: TargetStatus[] = cfg.targets.map((t) => {
+      const have = stock ? round(stock.get(t.kind === "resource" ? t.resource : t.item) ?? 0, t.kind === "resource" ? 3 : 0) : null;
+      return {
+        key: targetKey(t),
+        label: t.kind === "resource" ? RES_LABEL[t.resource] : t.item.charAt(0).toUpperCase() + t.item.slice(1).replace(/_/g, " "),
+        unit: t.kind === "resource" ? "ECE" : "",
+        have,
+        min: t.min,
+        short: have === null ? 0 : round(Math.max(0, t.min - have), 3),
+      };
+    });
+    const fuel = p ? fuelPercent(p) : null;
+    targets.push({ key: "fuel", label: "Fuel", unit: "%", have: fuel, min: cfg.fuelFloorPercent, short: fuel === null ? 0 : Math.max(0, cfg.fuelFloorPercent - fuel) });
+    const mannyCount = v?.mannies?.length ?? null;
+    targets.push({ key: "mannies", label: "Mannies at the station", unit: "", have: mannyCount, min: cfg.mannyTarget, short: mannyCount === null ? 0 : Math.max(0, cfg.mannyTarget - mannyCount) });
+
+    const members: MemberStatus[] = Object.entries(data.members)
+      .filter(([, m]) => m.stationId === cfg.probeId)
+      .map(([id, m]) => {
+        const mv = views.get(Number(id));
+        const mp = mv && isFullProbe(mv.detail) ? mv.detail : null;
+        const msector = sectorOf(mv);
+        const notes: string[] = [];
+        if (!mv) notes.push("This probe is no longer in your fleet.");
+        else if (!mv.summary.isReachable) notes.push("Out of command range: no orders can reach it until coverage returns.");
+        if (!m.role) notes.push("No role yet. Pick one so the station knows what to use it for.");
+        const isMoving = mp ? moving(mp) : false;
+        const docked = !!mp && same(msector, sector) && !isMoving;
+        const target = m.role ? cfg.mannyPerRole[m.role] : null;
+        const mannies = mv?.mannies?.length ?? null;
+        if (target !== null && mannies !== null && mannies < target) notes.push(`${target - mannies} Manny short of the ${m.role} target of ${target}.`);
+        const extra = mp?.inventory ? mp.inventory.containers.filter((c) => c.kind === "container").length : null;
+        if (extra !== null && extra >= 5) notes.push(`${extra} additional containers: each move risks a broken container link (10% at 5, +10% per extra).`);
+        return {
+          probeId: Number(id),
+          name: mv?.summary.name ?? `Probe ${id}`,
+          role: m.role,
+          reachable: !!mv?.summary.isReachable,
+          status: mv?.detail?.status ?? mv?.summary.status ?? "missing",
+          sector: msector,
+          docked,
+          fuelPercent: mp ? fuelPercent(mp) : null,
+          additionalContainers: extra,
+          mannies,
+          mannyTarget: target,
+          notes,
+        };
+      })
+      .sort((a, b) => a.probeId - b.probeId);
+
+    const checks: Check[] = [];
+    if (!v) checks.push({ ok: false, text: "This probe is no longer in your fleet. Remove the station or wait for it to come back." });
+    else {
+      checks.push(v.summary.isReachable
+        ? { ok: true, text: "In command range." }
+        : { ok: false, text: "Out of command range: the panel can't order the station until coverage returns." });
+      checks.push(v.summary.isDefault
+        ? { ok: true, text: "Default probe: every probe in this sector or on its SCUT network can be ordered." }
+        : { ok: false, text: "Not the default probe. Orders only reach probes near the default probe, so group probes may drop out of reach. Use \"Make default probe\"." });
+      const nets = (v.sector?.scutNetworks ?? []).map((n) => n.name || `Network ${n.id}`);
+      checks.push(nets.length
+        ? { ok: true, text: `On SCUT network ${nets.join(", ")}: ferries can be ordered anywhere it covers.` }
+        : { ok: false, text: "No active SCUT network here. Ferries can only be ordered while they are in this sector. A Scout can extend coverage." });
+      if (p && moving(p)) checks.push({ ok: false, text: "The station is moving. Stations should stay put; hand-offs need both probes stopped." });
+      if (fuel !== null && fuel < cfg.fuelFloorPercent) checks.push({ ok: false, text: `Fuel ${fuel}% is below the station's floor of ${cfg.fuelFloorPercent}%.` });
+    }
+    const lost = members.filter((m) => !m.reachable).length;
+    if (lost) checks.push({ ok: false, text: `${lost} group probe${lost > 1 ? "s are" : " is"} out of command range.` });
+    const unassigned = members.filter((m) => !m.role).length;
+    if (unassigned) checks.push({ ok: false, text: `${unassigned} group probe${unassigned > 1 ? "s have" : " has"} no role yet.` });
+
+    return {
+      probeId: cfg.probeId,
+      name: v?.summary.name ?? `Probe ${cfg.probeId}`,
+      config: cfg,
+      reachable: !!v?.summary.isReachable,
+      isDefault: !!v?.summary.isDefault,
+      status: v?.detail?.status ?? v?.summary.status ?? "missing",
+      sector,
+      scutNetworks: (v?.sector?.scutNetworks ?? []).map((n) => n.name || `Network ${n.id}`),
+      fuelPercent: fuel,
+      integrity: p?.systems?.integrityPercent ?? null,
+      additionalContainers: p?.inventory ? p.inventory.containers.filter((c) => c.kind === "container").length : null,
+      targets,
+      members,
+      checks,
+    };
+  });
+}
+
+export interface StationsDeps {
+  /** Sets a probe's role in the automation settings (which also drives naming). */
+  setRole: (probeId: number, role: ProbeRole) => Promise<void>;
+  snapshot: () => Snapshot;
+  onActed?: () => void;
+  now?: () => number;
+}
+
+export class Stations extends EventEmitter {
+  private readonly store: JsonStore<StoredData>;
+  private data: StoredData = { stations: [], members: {}, log: [], knownProbes: null };
+
+  constructor(private readonly game: Game, dataDir: string | undefined, private readonly deps: StationsDeps) {
+    super();
+    this.store = new JsonStore<StoredData>(dataDir, "stations.json", () => ({ stations: [], members: {}, log: [], knownProbes: null }));
+  }
+
+  async load(): Promise<void> {
+    this.data = await this.store.load();
+  }
+
+  get stations(): StationConfig[] {
+    return this.data.stations;
+  }
+
+  get members(): StationsData["members"] {
+    return this.data.members;
+  }
+
+  get log(): StationLogEntry[] {
+    return this.data.log;
+  }
+
+  isStation(probeId: number): boolean {
+    return this.data.stations.some((s) => s.probeId === probeId);
+  }
+
+  status(): StationStatus[] {
+    return stationStatus(this.deps.snapshot(), this.data);
+  }
+
+  private now(): number {
+    return this.deps.now?.() ?? Date.now();
+  }
+
+  private view(probeId: number): ProbeView | undefined {
+    return this.deps.snapshot().probes.find((v) => v.summary.id === probeId);
+  }
+
+  private addLog(e: Omit<StationLogEntry, "at">): void {
+    this.data.log.push({ at: new Date(this.now()).toISOString(), ...e });
+    if (this.data.log.length > MAX_LOG) this.data.log.splice(0, this.data.log.length - MAX_LOG);
+  }
+
+  private async save(): Promise<void> {
+    await this.store.save(this.data);
+    this.emit("changed");
+  }
+
+  async makeStation(probeId: number): Promise<StationConfig> {
+    const v = this.view(probeId);
+    if (!v) throw new StationError(404, `Probe ${probeId} is not in your fleet.`);
+    const existing = this.data.stations.find((s) => s.probeId === probeId);
+    if (existing) return existing;
+    const cfg: StationConfig = { probeId, ...structuredClone(DEFAULT_STATION), createdAt: new Date(this.now()).toISOString() };
+    delete this.data.members[String(probeId)];
+    this.data.stations.push(cfg);
+    await this.deps.setRole(probeId, "Station");
+    this.addLog({ stationId: probeId, probeId, label: `Made ${v.summary.name} a station`, endpoint: null, ok: true, message: null });
+    await this.save();
+    return cfg;
+  }
+
+  async removeStation(probeId: number): Promise<void> {
+    const cfg = this.data.stations.find((s) => s.probeId === probeId);
+    if (!cfg) throw new StationError(404, "That probe is not a station.");
+    this.data.stations = this.data.stations.filter((s) => s.probeId !== probeId);
+    for (const [id, m] of Object.entries(this.data.members))
+      if (m.stationId === probeId) {
+        delete this.data.members[id];
+        await this.deps.setRole(Number(id), "Probe");
+      }
+    await this.deps.setRole(probeId, "Probe");
+    this.addLog({ stationId: probeId, probeId, label: "Station removed; its group probes went back to normal automation", endpoint: null, ok: true, message: null });
+    await this.save();
+  }
+
+  async updateStation(probeId: number, patch: Partial<StationConfig>): Promise<StationConfig> {
+    const cfg = this.data.stations.find((s) => s.probeId === probeId);
+    if (!cfg) throw new StationError(404, "That probe is not a station.");
+    if (patch.mode && MODES.includes(patch.mode)) cfg.mode = patch.mode;
+    if (patch.targets !== undefined) cfg.targets = sanitizeTargets(patch.targets);
+    if (patch.fuelFloorPercent !== undefined) cfg.fuelFloorPercent = clamp(patch.fuelFloorPercent, 0, 100, cfg.fuelFloorPercent);
+    if (patch.mannyTarget !== undefined) cfg.mannyTarget = clamp(patch.mannyTarget, 0, 500, cfg.mannyTarget);
+    if (patch.mannyPerRole && typeof patch.mannyPerRole === "object")
+      for (const r of MEMBER_ROLES) if (r in patch.mannyPerRole) cfg.mannyPerRole[r] = clamp(patch.mannyPerRole[r], 0, 100, cfg.mannyPerRole[r]);
+    await this.save();
+    return cfg;
+  }
+
+  /**
+   * Puts a probe in a station's group with a role, changes its role, or (stationId null) takes it out.
+   * Per the design, a role only changes while the probe is in reach.
+   */
+  async setMember(probeId: number, stationId: number | null, role: MemberRole | null): Promise<void> {
+    const v = this.view(probeId);
+    if (!v) throw new StationError(404, `Probe ${probeId} is not in your fleet.`);
+    if (this.isStation(probeId)) throw new StationError(400, "A station can't join another station's group.");
+    if (role !== null && !MEMBER_ROLES.includes(role)) throw new StationError(400, "Role must be Hauler, Tanker or Scout.");
+    const key = String(probeId);
+    const before = this.data.members[key];
+    if (stationId === null) {
+      if (!before) return;
+      delete this.data.members[key];
+      await this.deps.setRole(probeId, "Probe");
+      this.addLog({ stationId: before.stationId, probeId, label: `${v.summary.name} left the group`, endpoint: null, ok: true, message: null });
+      await this.save();
+      return;
+    }
+    if (!this.isStation(stationId)) throw new StationError(404, "That station doesn't exist.");
+    if (!v.summary.isReachable && (before?.role ?? null) !== role)
+      throw new StationError(409, `${v.summary.name} is out of command range. Its role can be changed once it is back in reach.`);
+    this.data.members[key] = { stationId, role, joinedAt: before?.stationId === stationId ? before.joinedAt : new Date(this.now()).toISOString() };
+    await this.deps.setRole(probeId, role ?? "Probe");
+    const st = this.view(stationId)?.summary.name ?? `Station ${stationId}`;
+    this.addLog({ stationId, probeId, label: `${v.summary.name} → ${st} as ${role ?? "no role"}`, endpoint: null, ok: true, message: null });
+    await this.save();
+  }
+
+  /** PATCH /api/probe/{id} {isDefault: true}: keeps the whole group in reach of the station. */
+  async makeDefault(stationId: number): Promise<{ ok: boolean; message: string }> {
+    if (!this.isStation(stationId)) throw new StationError(404, "That probe is not a station.");
+    const endpoint = `PATCH /api/probe/${stationId}`;
+    try {
+      unwrap(await this.game.action.PATCH("/api/probe/{probeId}", { params: { path: { probeId: stationId } }, body: { isDefault: true } }));
+      this.addLog({ stationId, probeId: stationId, label: "Made the station the default probe", endpoint, ok: true, message: null });
+      await this.save();
+      this.deps.onActed?.();
+      return { ok: true, message: "The station is now the default probe." };
+    } catch (err) {
+      const message = err instanceof GameError
+        ? err.status === 422
+          ? "The game refused: the station must be in the same sector as the current default probe, or on the same active SCUT network."
+          : `${err.code}: ${err.message}`
+        : String(err);
+      this.addLog({ stationId, probeId: stationId, label: "Make the station the default probe", endpoint, ok: false, message });
+      await this.save();
+      return { ok: false, message };
+    }
+  }
+
+  /** Housekeeping on every poll: a probe that appears in a station's sector joins its group with no role. */
+  async onSnapshot(snapshot: Snapshot): Promise<void> {
+    const ids = snapshot.probes.map((v) => v.summary.id);
+    if (!ids.length) return;
+    let changed = false;
+    if (this.data.knownProbes) {
+      const known = new Set(this.data.knownProbes);
+      for (const v of snapshot.probes) {
+        const id = v.summary.id;
+        if (known.has(id) || this.isStation(id) || this.data.members[String(id)]) continue;
+        const at = this.data.stations.find((s) => same(sectorOf(snapshot.probes.find((x) => x.summary.id === s.probeId)), sectorOf(v)));
+        if (!at) continue;
+        this.data.members[String(id)] = { stationId: at.probeId, role: null, joinedAt: new Date(this.now()).toISOString() };
+        this.addLog({ stationId: at.probeId, probeId: id, label: `New probe ${v.summary.name} joined the group with no role`, endpoint: null, ok: true, message: null });
+        changed = true;
+      }
+    }
+    const next = [...new Set([...(this.data.knownProbes ?? []), ...ids])].sort((a, b) => a - b);
+    if (next.length !== (this.data.knownProbes?.length ?? -1)) changed = true;
+    this.data.knownProbes = next;
+    if (changed) await this.save();
+  }
+}

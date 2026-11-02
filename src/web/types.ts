@@ -15,9 +15,13 @@ export interface PanelState {
   readySuggestions?: number;
   pendingMoves?: number;
   unreadMessages?: number;
+  stationIds?: number[];
+  stationMembers?: Record<string, StationMember>;
+  stationWarnings?: number;
   unreadByProbe?: Record<string, number>;
   orders?: Record<string, PanelOrder>;
   planned?: Array<{ probeId: number | null; mannyId: string | null; label: string; why: string }>;
 }
 import type { PanelOrder } from "../shared/activity";
+import type { StationMember } from "../shared/stations";
 export type { AutomationSettings, AutomationAction, AutomationLogEntry, PlannedRename, ProbeAutomationSettings, ProbeRole } from "../shared/automation";

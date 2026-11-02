@@ -100,7 +100,7 @@ export function AutomationView({ state, now }: { state: PanelState; now: number 
         </>
       )}
 
-      {tab === "naming" && <Naming data={data} save={save} reload={load} probes={state.snapshot.probes.map((p) => p.summary)} />}
+      {tab === "naming" && <Naming data={data} save={save} reload={load} probes={state.snapshot.probes.map((p) => p.summary)} state={state} />}
 
       {tab === "log" && (
         <div className="table-wrap">
@@ -135,9 +135,9 @@ function NumRow({ label, value, step, onSave }: { label: string; value: number; 
   );
 }
 
-function Naming({ data, save, reload, probes }: {
+function Naming({ data, save, reload, probes, state }: {
   data: AutomationResponse; save: (p: Partial<AutomationSettings>) => Promise<void>; reload: () => void;
-  probes: Array<{ id: number; name: string }>;
+  probes: Array<{ id: number; name: string }>; state: PanelState;
 }) {
   const s = data.settings;
   const locked = new Set(s.lockedNames);
@@ -169,12 +169,16 @@ function Naming({ data, save, reload, probes }: {
       <div className="card">
         <strong>Probe roles</strong>
         <p className="muted tiny">The role sets the probe name and its Mannies' code.</p>
-        {probes.map(({ id: pid, name }) => { const id = String(pid); return (
+        {probes.map(({ id: pid, name }) => { const id = String(pid); const role = (s.probes[id]?.role ?? s.defaults.role) as string;
+          const managed = (state.stationIds ?? []).includes(pid) || !!state.stationMembers?.[id];
+          return managed ? (
+            <div key={id} className="row"><span>{name}</span><span className="tiny">{role} · <a href="#/stations">set on Stations</a></span></div>
+          ) : (
           <label key={id} className="row">
             <span>{name}</span>
-            <select value={(s.probes[id]?.role ?? s.defaults.role) as string}
+            <select value={role}
               onChange={(e) => save({ probes: { [id]: { role: e.target.value as ProbeRole } } } as Partial<AutomationSettings>)}>
-              {ROLES.map((r) => <option key={r}>{r}</option>)}
+              {ROLES.filter((r) => r !== "Station" || role === "Station").map((r) => <option key={r}>{r}</option>)}
             </select>
           </label>
         ); })}
