@@ -9,6 +9,8 @@ import { Game } from "./gameClient.js";
 import { Poller } from "./poller.js";
 import { Fixer } from "./fixer.js";
 import { DiscoveryTracker } from "./discovery.js";
+import { Automation } from "./automation.js";
+import type { AutomationSettings } from "../shared/automation.js";
 import type { AutoFixMode } from "../shared/problems.js";
 
 const config = loadConfig();
@@ -32,11 +34,14 @@ const discovery = new DiscoveryTracker(game, config.dataDir, {
   blueprintCheckMs: config.blueprintCheckMs,
 });
 
-// After every refresh: fix first (urgent), then scan for discoveries.
+const automation = new Automation(game, config.dataDir, () => poller.refreshSoon(3000));
+
+// After every refresh: fix first (urgent), then automation, then scan for discoveries.
 let hooks: Promise<void> = Promise.resolve();
 poller.on("snapshot", (snapshot) => {
   hooks = hooks
     .then(() => fixer.onSnapshot(snapshot))
+    .then(() => automation.onSnapshot(snapshot))
     .then(() => discovery.onSnapshot(snapshot))
     .catch((err) => app.log.error(err, "post-poll hooks failed"));
 });
@@ -48,6 +53,7 @@ function panelState() {
     fixMode: fixer.mode,
     problems: fixer.problems,
     unreadDiscoveries: discovery.discoveries().filter((d) => !d.read && d.present).length,
+    automationMode: automation.settings.mode,
   };
 }
 
@@ -87,6 +93,20 @@ app.post<{ Body: { problemKey?: string; fixId?: string } }>("/panel-api/fix", as
   return { entry: await fixer.runManually(problemKey, fixId) };
 });
 
+app.get("/panel-api/automation", async () => ({
+  settings: automation.settings,
+  plan: automation.lastPlan,
+  renames: automation.renames,
+  renamedCount: Object.keys(automation.originalNames).length,
+  log: automation.log.slice(-300).reverse(),
+}));
+
+app.post<{ Body: Partial<AutomationSettings> }>("/panel-api/automation/settings", async (req) => ({
+  settings: await automation.updateSettings(req.body ?? {}),
+}));
+
+app.post("/panel-api/automation/revert-names", async () => ({ reverted: await automation.revertNames(poller.snapshot) }));
+
 app.get("/panel-api/discoveries", async () => ({ discoveries: discovery.discoveries(), scans: discovery.scans() }));
 
 app.post<{ Body: { keys?: string[] | "all" } }>("/panel-api/discoveries/read", async (req) => {
@@ -116,12 +136,14 @@ app.get("/panel-api/events", (req, reply) => {
   poller.on("snapshot", send);
   fixer.on("changed", send);
   discovery.on("changed", send);
+  automation.on("changed", send);
   const ping = setInterval(() => reply.raw.write(": ping\n\n"), 25_000);
   req.raw.on("close", () => {
     clearInterval(ping);
     poller.off("snapshot", send);
     fixer.off("changed", send);
     discovery.off("changed", send);
+    automation.off("changed", send);
   });
 });
 
@@ -137,7 +159,7 @@ if (webRoot) {
   });
 }
 
-await Promise.all([poller.loadPersisted(), fixer.load(), discovery.load()]);
+await Promise.all([poller.loadPersisted(), fixer.load(), discovery.load(), automation.load()]);
 poller.start();
 await app.listen({ host: "0.0.0.0", port: config.port });
 

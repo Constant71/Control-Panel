@@ -20,7 +20,7 @@ const container = (id: string, label: string, kind: "probe" | "container", capac
 
 const inventory = (used: number): S["ProbeInventory"] => ({
   capacity: 1, capacityUnit: "earth_container_equivalent", usedCapacity: used, freeCapacity: 1 - used,
-  items: [],
+  items: [{ id: "itm-manny-a", type: "manny", name: "Manny", containerSpace: 0.02 }],
   resourceStocks: [
     {
       id: "stock-metals", type: "metals", name: "Metals", amount: used * 0.6, containerSpace: used * 0.6,
@@ -108,6 +108,20 @@ export function buildWorld() {
     scan: {} as S["SectorObservation"]["scan"], scutCoverageStatus: "uncovered", scutNetworks: [],
     objects: [
       { id: "manny-mny_lost", type: "manny", name: "manny-old" } as S["SectorObject"],
+      {
+        id: "asteroid-ice-1", type: "asteroid", name: "Ice Deut 15ce", resourceTypes: ["ice", "deuterium"],
+        resourceComposition: { deuterium: 0.3, metals: 0, ice: 0.7, carbon_compounds: 0 },
+        resourceAmounts: { deuterium: 0.5, metals: 0, ice: 2, carbon_compounds: 0 },
+      } as unknown as S["SectorObject"],
+      {
+        id: "sys-1", type: "solar_system", name: "System abc",
+        minableTargets: [{
+          id: "asteroid-metal-1", type: "asteroid", name: "Metal 3b91", mass: 1e-6, resources: ["iron"], resourceTypes: ["metals"],
+          resourceComposition: { deuterium: 0, metals: 1, ice: 0, carbon_compounds: 0 },
+          resourceAmounts: { deuterium: 0, metals: 3, ice: 0, carbon_compounds: 0 },
+        }],
+      } as unknown as S["SectorObject"],
+      { id: "construct-home", type: "dormant_construct", name: "Dormant construct", inspectable: true } as unknown as S["SectorObject"],
     ],
   };
   const visitedSectorObs = (v: { x: number; y: number; z: number }): S["SectorObservation"] => ({

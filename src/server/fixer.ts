@@ -16,6 +16,7 @@ import { GameError, unwrap } from "./gameClient.js";
 import type { Snapshot } from "./poller.js";
 import { detectProblems } from "./detect.js";
 import { JsonStore } from "./store.js";
+import { markOrdered, recentlyOrdered } from "./orders.js";
 import type { AutoFixMode, FixAttemptState, FixLogEntry, FixOption, FixPlan, Problem } from "../shared/problems.js";
 
 const SETTLE_MS = 5 * 60_000;
@@ -23,7 +24,6 @@ const BACKOFF_BASE_MS = 5 * 60_000;
 const BACKOFF_MAX_MS = 6 * 3_600_000;
 const MAX_PER_CYCLE = 5;
 const LOG_SIZE = 1000;
-const RECENT_ORDER_MS = 2 * 60_000;
 
 interface FixerState {
   mode: AutoFixMode;
@@ -35,7 +35,6 @@ export class Fixer extends EventEmitter {
   problems: Problem[] = [];
   private state: FixerState = { mode: "auto", attempts: {}, log: [] };
   private readonly store: JsonStore<FixerState>;
-  private recentOrders = new Map<string, number>(); // mannyId -> ms
 
   constructor(
     private readonly game: Game,
@@ -71,10 +70,9 @@ export class Fixer extends EventEmitter {
   /** Called after every poll. Detects problems and runs eligible auto fixes. */
   async onSnapshot(snapshot: Snapshot): Promise<void> {
     const t = this.now();
-    for (const [id, at] of this.recentOrders) if (t - at > RECENT_ORDER_MS) this.recentOrders.delete(id);
     this.problems = detectProblems(snapshot, {
       now: t,
-      recentlyOrderedMannies: new Set(this.recentOrders.keys()),
+      recentlyOrderedMannies: recentlyOrdered(t),
       dropCargoBeforeDeadlineMs: this.dropCargoBeforeDeadlineMs,
     });
     if (this.state.mode === "off") {
@@ -133,7 +131,7 @@ export class Fixer extends EventEmitter {
     }
     try {
       const status = await this.call(f.plan);
-      for (const id of mannyIdsOf(f.plan)) this.recentOrders.set(id, t);
+      for (const id of mannyIdsOf(f.plan)) markOrdered(id, t);
       this.state.attempts[f.id] = { lastAttemptAt: new Date(t).toISOString(), lastOk: true, failures: 0, nextEligibleAt: new Date(t + SETTLE_MS).toISOString() };
       this.state.attempts[`problem:${p.key}`] = { ...this.state.attempts[f.id] };
       this.logEntry(p, f, initiator, false, true, status, null, null);
