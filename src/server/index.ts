@@ -19,7 +19,7 @@ import { redact, diagnosticsFilename } from "./diagnostics.js";
 import type { AutomationSettings } from "../shared/automation.js";
 import type { AutoFixMode } from "../shared/problems.js";
 import type { PanelOrder } from "../shared/activity.js";
-import { storageHealth } from "./store.js";
+import { flushStores, storageHealth } from "./store.js";
 
 const config = loadConfig();
 const STARTED_AT = new Date().toISOString();
@@ -337,6 +337,7 @@ for (const sig of ["SIGINT", "SIGTERM"] as const) {
   process.on(sig, async () => {
     poller.stop();
     await app.close();
+    await flushStores(); // finish queued saves so nothing set just before a restart is lost
     process.exit(0);
   });
 }

@@ -84,8 +84,8 @@ export function App() {
       <main>
         {state?.storageError && (
           <div className="card warning pad">
-            <strong>Settings are not being saved.</strong> {state.storageError}. Roles, stations, crafting queues and names will be
-            lost on restart. Update the panel (the container now fixes the data folder's permissions when it starts).
+            <strong>Saved settings problem.</strong> {state.storageError}. Roles, stations, crafting queues or names may be lost on
+            restart. Send a debug export from the System page.
           </div>
         )}
         {!state ? (
