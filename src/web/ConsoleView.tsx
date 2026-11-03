@@ -71,12 +71,19 @@ function optionsFor(name: string, state: PanelState, probeId: string): Opt[] | n
   }
 }
 
-function OpForm({ op, state }: { op: Operation; state: PanelState }) {
+/** One call's form. `initial` pre-fills path/query values and body fields (the probe and Manny you opened it from). */
+export function OpForm({ op, state, initial, onDone }: {
+  op: Operation; state: PanelState; initial?: { params?: Record<string, string>; body?: Record<string, unknown> }; onDone?: (r: CallResult) => void;
+}) {
   const firstReachable = state.snapshot.probes.find((p) => p.summary.isReachable)?.summary.id;
-  const [params, setParams] = useState<Record<string, string>>(() =>
-    Object.fromEntries(op.params.filter((p) => p.name === "probeId").map((p) => [p.name, String(firstReachable ?? "")])),
-  );
-  const [body, setBody] = useState<Record<string, unknown>>({});
+  const [params, setParams] = useState<Record<string, string>>(() => ({
+    ...Object.fromEntries(op.params.filter((p) => p.name === "probeId").map((p) => [p.name, String(firstReachable ?? "")])),
+    ...Object.fromEntries(Object.entries(initial?.params ?? {}).filter(([k]) => op.params.some((p) => p.name === k))),
+  }));
+  const [body, setBody] = useState<Record<string, unknown>>(() => {
+    const props = op.body?.properties ?? {};
+    return Object.fromEntries(Object.entries(initial?.body ?? {}).filter(([k]) => k in props));
+  });
   const [rawMode, setRawMode] = useState(false);
   const [raw, setRaw] = useState("{}");
   const [res, setRes] = useState<CallResult | null>(null);
@@ -97,7 +104,9 @@ function OpForm({ op, state }: { op: Operation; state: PanelState }) {
     const query: Record<string, string> = {};
     for (const p of op.params) if (params[p.name] !== undefined && params[p.name] !== "") (p.in === "path" ? path : query)[p.name] = params[p.name];
     try {
-      setRes(await callOp(op.id, { path, query, body: op.body ? b : undefined, confirmed: op.risk === "confirm" }));
+      const r = await callOp(op.id, { path, query, body: op.body ? b : undefined, confirmed: op.risk === "confirm" });
+      setRes(r);
+      onDone?.(r);
     } finally {
       setBusy(false);
     }
