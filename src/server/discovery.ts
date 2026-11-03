@@ -16,6 +16,8 @@ import { JsonStore } from "./store.js";
 import type { Discovery, DiscoveryKind, SectorScanInfo } from "../shared/problems.js";
 import { mineableTargets } from "./automation.js";
 import { sectorProfile, type SectorProfile } from "../shared/starmap.js";
+import { hiddenIdFor } from "./depot.js";
+import { isFullProbe } from "../shared/attention.js";
 
 /** What the panel knows about a sector for hauler trips (Stations 5c). */
 export interface SectorKnowledge {
@@ -49,6 +51,24 @@ interface DiscoveryState {
   discoveries: Record<string, Discovery>;
   knownBlueprints: string[] | null;
   lastBlueprintCheck: string | null;
+  /** Sector object ids of our own containers once detached (depots, hand-offs, drops): not discoveries. */
+  ownDetached?: string[];
+}
+
+/**
+ * Object ids our own containers get when detached: every container ever seen aboard one of our
+ * probes (the game names it detached-container-<container id>), plus any detached-container id a
+ * Manny's task refers to (detach results expose the hidden container id).
+ */
+export function ownDetachedIds(snapshot: Snapshot): string[] {
+  const out = new Set<string>();
+  for (const p of snapshot.probes) {
+    if (isFullProbe(p.detail))
+      for (const c of p.detail.inventory?.containers ?? []) if (c.kind === "container" && c.id) out.add(hiddenIdFor(c.id));
+    for (const m of p.mannies ?? [])
+      for (const id of JSON.stringify(m.task ?? null).match(/detached-container-[a-z0-9_-]+/g) ?? []) out.add(id);
+  }
+  return [...out];
 }
 
 export interface DiscoveryOptions {
@@ -130,6 +150,12 @@ export class DiscoveryTracker extends EventEmitter {
       this.state.sectors[k] ??= { sector: v.relativeCoordinates, scannedAt: null, knowledgeLevel: null, objects: [], error: null };
     }
 
+    // Our own containers, so they never show up as finds.
+    const own = new Set([...(this.state.ownDetached ?? []), ...ownDetachedIds(snapshot)]);
+    this.state.ownDetached = [...own];
+    for (const [k, d] of Object.entries(this.state.discoveries))
+      if (d.kind === "detached_container" && d.objectId && own.has(d.objectId)) delete this.state.discoveries[k];
+
     // Free data: current-sector observations already fetched by the poller.
     for (const p of snapshot.probes) if (p.sector) this.ingest(p.sector, nowIso);
 
@@ -210,6 +236,7 @@ export class DiscoveryTracker extends EventEmitter {
     for (const o of objects) {
       const spec = OBJECT_KINDS[o.type];
       if (!spec || !o.id) continue;
+      if (spec.kind === "detached_container" && this.state.ownDetached?.includes(o.id)) continue;
       const key = `${spec.kind}:${o.id}`;
       seen.add(key);
       this.upsert(key, { kind: spec.kind, title: spec.title(o.name ?? o.id), detail: o.summary ?? spec.detail, sector: obs.relativeCoordinates, objectId: o.id }, nowIso, false);

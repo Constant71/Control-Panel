@@ -1,4 +1,4 @@
-import { useEffect, useMemo, useState } from "react";
+import { Fragment, useEffect, useMemo, useState } from "react";
 import { useLiveState } from "./useLiveState";
 import type { PanelState, ProbeView, Schemas } from "./types";
 import { probeFlags, mannyFlags, worst, isFullProbe, type Flag } from "../shared/attention";
@@ -15,6 +15,7 @@ import { ConsoleView } from "./ConsoleView";
 import { StationsView } from "./StationsView";
 import { GuideView } from "./GuideView";
 import { callOp } from "./api";
+import { MannyControls, ProbeControls, StuckMannies } from "./ControlsPanel";
 
 type Route =
   | { view: "fleet" } | { view: "probe"; id: number } | { view: "map" } | { view: "missions" } | { view: "system" }
@@ -258,7 +259,7 @@ function Row({ k, v }: { k: string; v: React.ReactNode }) {
 
 function ProbeDetail({ state, id, now }: { state: PanelState; id: number; now: number }) {
   const p = state.snapshot.probes.find((x) => x.summary.id === id);
-  const [tab, setTab] = useState<"mannies" | "storage" | "alerts" | "sector">("mannies");
+  const [tab, setTab] = useState<"mannies" | "storage" | "alerts" | "sector" | "controls">("mannies");
   if (!p) return <p className="pad muted">Probe {id} not found.</p>;
   const d = p.detail;
   return (
@@ -286,15 +287,17 @@ function ProbeDetail({ state, id, now }: { state: PanelState; id: number; now: n
       ) : (
         <>
           <div className="tabs">
-            {(["mannies", "storage", "alerts", "sector"] as const).map((t) => (
+            {(["mannies", "storage", "alerts", "sector", "controls"] as const).map((t) => (
               <button key={t} className={tab === t ? "on" : ""} onClick={() => setTab(t)}>{t}</button>
             ))}
           </div>
+          <StuckMannies state={state} p={p} />
           {isFullProbe(d) && <ProbeActivity p={p} d={d} state={state} now={now} />}
           {tab === "mannies" && <MannyTable p={p} state={state} now={now} />}
           {tab === "storage" && isFullProbe(d) && <Storage inv={d.inventory} />}
           {tab === "alerts" && <Alerts probeId={p.summary.id} alerts={p.alerts ?? []} warnings={p.damageWarnings ?? []} />}
           {tab === "sector" && <SectorView sector={p.sector} />}
+          {tab === "controls" && <ProbeControls state={state} p={p} />}
         </>
       )}
     </div>
@@ -357,6 +360,7 @@ function ProbeActivity({ p, d, state, now }: { p: ProbeView; d: Schemas["Probe"]
 function MannyTable({ p, state, now }: { p: ProbeView; state: PanelState; now: number }) {
   const mannies = p.mannies ?? [];
   const [filter, setFilter] = useState<"all" | "attention" | "idle" | "busy">("all");
+  const [open, setOpen] = useState<string | null>(null);
   const ctx = {
     objects: (p.sector?.objects ?? []) as Array<Record<string, unknown>>, probeName: p.summary.name, now,
     probes: state.snapshot.probes.map((x) => ({ id: x.summary.id, name: x.summary.name })),
@@ -380,18 +384,24 @@ function MannyTable({ p, state, now }: { p: ProbeView; state: PanelState; now: n
       <div className="table-wrap">
         <table>
           <thead>
-            <tr><th>Name</th><th>Doing</th><th>Progress</th><th>Where</th><th>Orders</th><th>Flags</th></tr>
+            <tr><th>Name</th><th>Doing</th><th>Progress</th><th>Where</th><th>Orders</th><th>Flags</th><th /></tr>
           </thead>
           <tbody>
             {rows.map(({ m, flags }) => (
-              <tr key={m.id} className={worst(flags) ?? ""}>
+              <Fragment key={m.id}>
+              <tr className={worst(flags) ?? ""}>
                 <td><strong>{m.name}</strong><div className="muted tiny">{m.id}</div></td>
                 <td className="doing"><Doing m={m} ctx={ctx} state={state} now={now} /></td>
                 <td>{m.currentTask ? <><Bar value={m.taskProgressPercent} max={100} /> {pct(m.taskProgressPercent)}</> : "—"}</td>
                 <td>{m.location.type === "probe" ? "on probe" : `sector ${vec(m.location.sector?.relative)}`}</td>
                 <td>{m.canReceiveOrders ? "yes" : "no"}</td>
                 <td><FlagList flags={flags.filter((f) => f.code !== "idle")} /></td>
+                <td><button className={`tiny ${open === m.id ? "on" : ""}`} onClick={() => setOpen(open === m.id ? null : m.id)}>Controls</button></td>
               </tr>
+              {open === m.id && (
+                <tr><td colSpan={7}><MannyControls state={state} p={p} m={m} /></td></tr>
+              )}
+              </Fragment>
             ))}
           </tbody>
         </table>

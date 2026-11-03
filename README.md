@@ -110,7 +110,8 @@ alerts on **potential blueprints**: dormant constructs (inspecting one with a
 Manny unlocks a probe improvement), newly learned blueprints
 (`probe-improvements-available`) and `blueprint_shared` alerts. It also lists
 abandoned Mannies, detached containers, drifting items, refuel stations and
-SCUT relays.
+SCUT relays. Your own detached containers (depots, hand-offs, anything that was
+ever aboard one of your probes) are left out.
 
 ## Step 3a: Automation (mining, constructs, naming)
 
@@ -208,6 +209,12 @@ then works like this:
 
 ## Step 4: Console, Comms and alert controls
 
+- **Probe controls:** each probe page has a Controls tab with every call that
+  acts on that probe (move, storage moves, jettison, printer, container rules…),
+  with the probe filled in. Each Manny row in the Mannies tab has a Controls
+  button with every call for that Manny. A Manny waiting outside for storage
+  space gets a red card on the probe page with "Drop cargo and dock"
+  (`drop-manny-cargo`) and the other ways out.
 - **Console:** every call in the game API spec is listed, grouped and
   searchable. Each form is built from the spec's own parameters and
   request-body schema. Probes, Mannies, sector objects, containers and items
