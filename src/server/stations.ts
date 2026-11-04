@@ -569,7 +569,11 @@ export class Stations extends EventEmitter {
     }
     if (this.data.trips.length > 200) this.data.trips.splice(0, this.data.trips.length - 200);
     this.dispatchNotes = dispatch.notes;
-    const grouped = new Set<number>([...this.data.stations.map((x) => x.probeId), ...Object.keys(this.data.members).map(Number)]);
+    // Scouts are group members that station dispatch never moves: exploration drives them.
+    const grouped = new Set<number>([
+      ...this.data.stations.map((x) => x.probeId),
+      ...Object.entries(this.data.members).filter(([, m]) => m.role !== "Scout").map(([k]) => Number(k)),
+    ]);
     const fleeing = new Set(Object.keys(this.data.flee).map(Number));
     this.deps.hold?.(grouped, new Set([...dispatch.noMining, ...fleeing]));
     const helpers = planHelpers(this.data.stations, this.data, snapshot, (id) => this.deps.queued?.(id) ?? []);

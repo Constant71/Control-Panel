@@ -77,6 +77,11 @@ export interface ExploreResult {
 
 type Obj = Record<string, unknown>;
 
+/** A Scout's job is exploring, so the role turns it on even when the Explore box is off. */
+export function explores(cfg: { explore: boolean; role: string }): boolean {
+  return cfg.explore || cfg.role === "Scout";
+}
+
 export function planExploration(input: ExploreInput): ExploreResult {
   const { snapshot, settings, scans, settledSince, costPerSector, inspected, now, approved = {}, skip = new Set() } = input;
   const res: ExploreResult = { moves: [], suggestions: [], departing: new Set(), status: [] };
@@ -96,7 +101,7 @@ export function planExploration(input: ExploreInput): ExploreResult {
 
   for (const v of snapshot.probes) {
     const cfg = settingsFor(settings, v.summary.id);
-    if (!cfg.explore) continue;
+    if (!explores(cfg)) continue;
     const st: ExploreStatus = { probeId: v.summary.id, probeName: v.summary.name, state: "waiting", text: "", candidates: [] };
     res.status.push(st);
     const say = (state: ExploreStatus["state"], text: string) => Object.assign(st, { state, text });
@@ -251,6 +256,6 @@ export function exploringProbes(snapshot: Snapshot, settings: AutomationSettings
   // A station never moves on its own (Stations design): it is skipped even with Explore on, as is its group.
   return snapshot.probes.filter((v) => {
     const cfg = settingsFor(settings, v.summary.id);
-    return cfg.explore && cfg.role !== "Station" && !skip.has(v.summary.id) && v.summary.isReachable && isFullProbe(v.detail);
+    return explores(cfg) && cfg.role !== "Station" && !skip.has(v.summary.id) && v.summary.isReachable && isFullProbe(v.detail);
   });
 }

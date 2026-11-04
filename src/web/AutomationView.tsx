@@ -85,8 +85,9 @@ export function AutomationView({ state, now }: { state: PanelState; now: number 
                   <NumRow label="Deuterium (% tank)" value={c.targets.deuteriumPercent} step={5} onSave={(v) => saveProbe(p.summary.id, { targets: { ...c.targets, deuteriumPercent: v } })} />
                   <div className="muted tiny mt">Exploration</div>
                   <label className="row"><span>Explore unvisited neighbour sectors</span>
-                    <input type="checkbox" checked={c.explore} onChange={(e) => saveProbe(p.summary.id, { explore: e.target.checked })} /></label>
-                  {c.explore && (
+                    <input type="checkbox" checked={c.explore || c.role === "Scout"} disabled={c.role === "Scout"} onChange={(e) => saveProbe(p.summary.id, { explore: e.target.checked })} /></label>
+                  {c.role === "Scout" && <div className="muted tiny">Scouts always explore.</div>}
+                  {(c.explore || c.role === "Scout") && (
                     <>
                       <NumRow label="Stay in each sector (min)" value={c.exploreDwellMinutes} step={15} onSave={(v) => saveProbe(p.summary.id, { exploreDwellMinutes: v })} />
                       <NumRow label="Fuel floor after a jump (%)" value={c.exploreMinFuelPercent} step={5} onSave={(v) => saveProbe(p.summary.id, { exploreMinFuelPercent: v })} />

@@ -276,3 +276,26 @@ test("a trip whose probe left the group is dropped, so nothing keeps holding its
     await mock.close();
   }
 });
+
+test("a Scout in a station group is left to exploration, other members are held", async () => {
+  const { mock, game, poller } = await setup();
+  try {
+    const snap = world(poller.snapshot);
+    const dir = await mkdtemp(path.join(tmpdir(), "panel-"));
+    let grouped: Set<number> = new Set();
+    const stations = new Stations(game, dir, {
+      setRole: async () => {}, snapshot: () => snap, mode: () => "auto", sectors: () => SECTORS, costPerSector: () => ({ generic: 10 }),
+      hold: (noExplore) => { grouped = noExplore; },
+    });
+    await stations.load();
+    await stations.makeStation(1);
+    await stations.setMember(2, 1, "Scout");
+    await stations.onSnapshot(snap);
+    assert.ok(grouped.has(1) && !grouped.has(2), "the station is held, the Scout is not");
+    await stations.setMember(2, 1, "Hauler");
+    await stations.onSnapshot(snap);
+    assert.ok(grouped.has(2));
+  } finally {
+    await mock.close();
+  }
+});
