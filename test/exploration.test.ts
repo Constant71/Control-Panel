@@ -140,3 +140,20 @@ test("confirming a move card sends POST /move with the target", async () => {
     await mock.close();
   }
 });
+
+test("a Scout explores without the Explore box ticked", async () => {
+  const { mock, poller } = await setup();
+  try {
+    const snap = parked(poller.snapshot);
+    snap.probes[0].sector!.scutNetworks = [{ id: 7, name: "Home net" }];
+    const scans = scansFor(mock);
+    scans["1,-1,0"] = { ...scans["1,-1,0"], scutCoverageStatus: "covered", scutNetworks: [{ id: 7, name: "Home net" }] };
+    const r = planExploration({
+      snapshot: snap, settings: settings({ "2": { role: "Scout" } }), scans, settledSince: {}, costPerSector: { generic: 20 },
+      inspected: new Set<string>(), now: Date.now(),
+    });
+    assert.deepEqual(r.moves.map((m) => m.probeId), [2]);
+  } finally {
+    await mock.close();
+  }
+});
