@@ -644,10 +644,12 @@ export class Stations extends EventEmitter {
         if (r.response.status === 404) {
           if (!d.lost) this.addLog({ stationId: d.stationId, probeId: d.stationId, label: `Depot ${d.objectId} on ${d.asteroidName} can't be found`, endpoint: `GET /api/probe/${d.stationId}/sector-objects/${d.objectId}/inventory`, ok: false, message: "404: nothing new is mined into it." });
           d.lost = true;
+          d.note = null;
           continue;
         }
         const inv = unwrap(r);
         d.lost = false;
+        d.note = null;
         d.contents = inv.resources.reduce((s, x) => s + (x.amount ?? 0), 0) + inv.items.reduce((s, x) => s + (x.containerSpace ?? 0), 0);
       } catch (err) {
         d.note = `Couldn't read the depot: ${err instanceof GameError ? `${err.status} ${err.code}` : String(err)}`;
@@ -750,7 +752,7 @@ export class Stations extends EventEmitter {
           const at = new Date(t).toISOString();
           this.data.depots.push({
             stationId: op.stationId, containerId: plan.containerId, objectId: seen ?? hiddenIdFor(plan.containerId), asteroidId: plan.asteroidId,
-            asteroidName: plan.asteroidName, capacity: plan.capacity, state: "hiding", at, updatedAt: at, contents: 0, readAt: null, note: null,
+            asteroidName: plan.asteroidName, capacity: plan.capacity, state: "hiding", at, updatedAt: at, contents: 0, readAt: null, note: null, mannyId: plan.mannyId,
           });
           break;
         }

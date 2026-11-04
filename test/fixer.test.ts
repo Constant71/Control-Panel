@@ -198,3 +198,31 @@ test("the fixer never moves deuterium to or from station-managed probes (no ping
     await mock.close();
   }
 });
+
+test("a core full of parts (no resources) gets an item move into a non-hand-off container", async () => {
+  const { mock, poller } = await setup();
+  try {
+    const snap = structuredClone(poller.snapshot);
+    const v = snap.probes[0];
+    const P = v.detail as import("../src/server/gameClient.ts").Schemas["Probe"];
+    v.mannies = [{ ...v.mannies![0], id: "idle1", name: "I1", currentTask: null, task: [], location: { type: "probe", sector: null }, canReceiveOrders: true } as never];
+    const C = (id: string, kind: "probe" | "container", cap: number, used: number, rules = {}) => ({ id, kind, label: id, sortOrder: 0, capacity: cap, usedCapacity: used, freeCapacity: cap - used, capacityUnit: "earth_container_equivalent" as const, rules });
+    P.inventory!.containers = [C("probe-core", "probe", 1, 0.97), C("handoff", "container", 1, 0, { strictExclusion: ["manny"] }), C("cargo", "container", 0.05, 0)];
+    for (const s of P.inventory!.resourceStocks) s.containers = [];
+    const item = (id: string, type: string, space: number, movable = true) =>
+      ({ id, type, name: type, containerSpace: space, currentTask: null, taskProgressPercent: 0, container: { id: "probe-core", kind: "probe", label: "Core", sortOrder: 0 }, metadata: { movable } });
+    P.inventory!.items = [item("printer", "atomic_3d_printer", 0.3, false), item("m1", "manny", 0.05), item("ac", "additional_container", 0), item("a1", "linear_actuator", 0.01), item("a2", "linear_actuator", 0.01), item("mc", "micro_conductor", 0.005)] as never;
+    const p = detectProblems(snap).find((x) => x.key === `probe:${P.id}:core_full`)!;
+    const f = p.fixes[0];
+    assert.ok(f && f.plan.kind === "storage_move_items", "item move offered");
+    assert.equal(f.plan.kind === "storage_move_items" && f.plan.toContainerId, "cargo", "never into a hand-off container");
+    assert.deepEqual(f.plan.kind === "storage_move_items" && [...f.plan.itemIds].sort(), ["a1", "a2", "mc"], "parts only: no printer, Manny or container");
+
+    v.mannies = [];
+    const waiting = detectProblems(snap).find((x) => x.key === `probe:${P.id}:core_full`)!;
+    assert.equal(waiting.fixes.length, 0);
+    assert.match(waiting.advice ?? "", /idle Manny/, "says what it is really waiting for");
+  } finally {
+    await mock.close();
+  }
+});
