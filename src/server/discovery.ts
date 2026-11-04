@@ -44,6 +44,9 @@ interface SectorRecord {
   coverage?: string | null;
   /** What the last scan listed (projector star map). */
   profile?: SectorProfile;
+  /** The last scan's full object list and scan details, for the sector info card on the Map page. */
+  raw?: Array<Record<string, unknown>>;
+  scan?: { confidence: number; possibleObjects: string[]; navigationalRisk: string | null; sensorMode: string | null; dataFreshness: string | null; scutNetworks: Array<{ id: number; name?: string }> };
 }
 
 interface DiscoveryState {
@@ -125,6 +128,16 @@ export class DiscoveryTracker extends EventEmitter {
       sector: s.sector, scannedAt: s.scannedAt, resources: s.resources ?? {}, scutNetworkIds: s.scutNetworkIds ?? [], coverage: s.coverage ?? null,
       hazards: s.objects.filter((o) => o.type === "black_hole" || o.type === "missile").map((o) => o.type),
     }));
+  }
+
+  /** Everything stored about one sector (Map page sector card). */
+  sectorRecord(v: Vec) {
+    const r = this.state.sectors[keyOf(v)];
+    if (!r) return null;
+    return {
+      scannedAt: r.scannedAt, knowledgeLevel: r.knowledgeLevel, error: r.error, coverage: r.coverage ?? null,
+      resources: r.resources ?? {}, objects: r.raw ?? r.objects, scan: r.scan ?? null,
+    };
   }
 
   /** Per-sector object counts and SCUT coverage for the projector star map. */
@@ -228,6 +241,12 @@ export class DiscoveryTracker extends EventEmitter {
       sector: obs.relativeCoordinates, scannedAt: nowIso, knowledgeLevel: obs.knowledgeLevel, objects, error: null,
       resources, scutNetworkIds: (obs.scutNetworks ?? []).map((n) => n.id), coverage: obs.scutCoverageStatus ?? null,
       profile: sectorProfile((obs.objects ?? []) as Array<Record<string, unknown>>),
+      raw: (obs.objects ?? []) as Array<Record<string, unknown>>,
+      scan: {
+        confidence: obs.confidence, possibleObjects: obs.possibleObjects ?? [], navigationalRisk: obs.navigationalRisk ?? null,
+        sensorMode: obs.sensorMode ?? null, dataFreshness: obs.dataFreshness ?? null,
+        scutNetworks: (obs.scutNetworks ?? []) as Array<{ id: number; name?: string }>,
+      },
     };
 
     // Only detailed scans list objects reliably; don't mark things gone on a weak scan.
