@@ -206,3 +206,32 @@ tr.note-row td { border-top: none; padding-top: 0; }
 .guide .table-wrap { margin: 0 0 12px; }
 .guide td, .guide th { vertical-align: top; }
 .guide code { background: var(--panel2); padding: 1px 4px; border-radius: 4px; font-size: 13px; }
+
+/* 3D map (Map page) and the sector card shown when a sector is tapped. */
+.map3d { position: relative; height: min(68vh, 680px); min-height: 320px; background: #000; border: 1px solid var(--line); border-radius: 10px; overflow: hidden; }
+.map3d-canvas { position: absolute; inset: 0; width: 100%; height: 100%; display: block; touch-action: none; cursor: grab; }
+.map3d-canvas:active { cursor: grabbing; }
+.map3d-tools { position: absolute; top: 8px; right: 8px; display: flex; gap: 6px; flex-wrap: wrap; justify-content: flex-end; max-width: calc(100% - 16px); }
+.map3d-tools button { background: rgba(18,24,33,.85); min-width: 40px; min-height: 36px; }
+.map3d-tools button.on { border-color: var(--accent); color: var(--accent); }
+.map3d-wait { position: absolute; inset: 0; display: flex; align-items: center; justify-content: center; color: var(--muted); }
+.map-legend { display: flex; flex-wrap: wrap; gap: 6px 14px; margin-top: 8px; }
+.map-legend span { display: inline-flex; align-items: center; gap: 6px; }
+.map-legend i { display: inline-block; width: 10px; height: 10px; border-radius: 50%; }
+.sector-card-head { display: flex; justify-content: space-between; align-items: center; gap: 8px; }
+.sector-card h4 { margin: 14px 0 6px; font-size: 13px; color: var(--muted); text-transform: uppercase; letter-spacing: .05em; }
+.sector-card details { margin: 4px 0; }
+.sector-card summary { cursor: pointer; padding: 4px 0; font-weight: 600; }
+.sector-row { padding: 6px 0 6px 10px; border-left: 2px solid var(--line); margin: 4px 0; }
+.sector-nested { margin-top: 4px; padding-left: 8px; border-left: 1px dashed var(--line); }
+.chips { display: flex; flex-wrap: wrap; gap: 6px; margin: 8px 0; }
+.chip { display: inline-block; padding: 2px 8px; border-radius: 999px; border: 1px solid var(--line); background: var(--panel2); font-size: 12px; margin-left: 4px; }
+.chips .chip { margin-left: 0; }
+.chip.good { border-color: var(--good); color: var(--good); }
+.chip.warn { border-color: var(--warn); color: var(--warn); }
+.chip.crit { border-color: var(--crit); color: var(--crit); }
+.chip.info { border-color: var(--info); color: var(--info); }
+.warn-t { color: var(--warn); }
+.crit-t { color: var(--crit); }
+.accent-t { color: var(--accent); }
+button.small { padding: 3px 8px; font-size: 12px; }

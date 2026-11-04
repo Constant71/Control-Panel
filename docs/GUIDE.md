@@ -333,10 +333,26 @@ The station log is at the bottom of the page. It lists every station action with
 
 ## Map and exploration
 
-The **map** is a top-down view of every sector you've visited. Squares are visited sectors, dots are probes (hollow
-means out of range), dashed lines are moves in progress, an outlined square marked **S** is a station, and the ring is
-your home sector (0, 0, 0). Use the **z** buttons to look at one layer at a time, or *all z* to see them stacked. Tap
-a square to see its visit history and the probes in it.
+The **map** opens in **3D**: the same star map as the projector page, which you can drag to turn and pinch or scroll to
+zoom. The buttons along the top spin it, zoom it, look straight down (**Top**), jump to sector (0, 0, 0) (**Home**) or
+show everything again (**Reset**). The legend under the map explains the colours (see also
+[Projector star map](#projector-star-map)).
+
+**Tap any sector, probe or dashed circle** to glide to it and open its card:
+
+- Whether you've visited it (how often, when), its SCUT coverage and networks, and when it was last scanned and how well.
+- **Probes** there or flying there, with their role and whether **Explore** is on. When it's on, you see what the
+  probe is waiting for (for example "Waiting to inspect 1 dormant construct here first"). When it's off, the card says
+  the panel won't move that probe on its own.
+- **Discoveries** in the sector, **mineable resources** in ECE, and every **object** the last scan listed, grouped by type, with
+  the details the game gives for each one (planet category and habitability, asteroid composition, size and resources,
+  solar-system stars, planets and minable targets, motorized asteroids, missiles and their impact time, and so on).
+- For an unvisited sector: its **neighbour scan** (star likely, planet range, black-hole chance, danger) and how each
+  exploring probe scores it as a next hop.
+
+**Flat** switches back to the old top-down view. Squares are visited sectors, dots are probes, dashed lines are moves,
+**S** marks a station, and the **z** buttons show one layer at a time. Your choice of 3D or Flat is remembered on that
+device.
 
 The **Exploration** box under the map shows each exploring probe and what it's doing (working sector, calling
 Mannies home, moving, waiting, needs you). Open **Neighbours considered** to see how it scored each neighbour.

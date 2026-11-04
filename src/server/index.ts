@@ -20,7 +20,9 @@ import type { AutomationSettings } from "../shared/automation.js";
 import type { AutoFixMode } from "../shared/problems.js";
 import type { PanelOrder } from "../shared/activity.js";
 import { flushStores, storageHealth } from "./store.js";
-import { buildStarMap } from "../shared/starmap.js";
+import { buildStarMap, type SectorInfo } from "../shared/starmap.js";
+import { settingsFor } from "./automation.js";
+import { isFullProbe } from "../shared/attention.js";
 
 const config = loadConfig();
 const STARTED_AT = new Date().toISOString();
@@ -268,6 +270,47 @@ app.get("/panel-api/starmap", async () => {
     problemSeverities: fixer.problems.map((p) => p.severity),
     now: Date.now(),
   });
+});
+
+// Full sector card for a tap on the Map page's 3D map.
+app.get<{ Querystring: { x?: string; y?: string; z?: string } }>("/panel-api/sector-info", async (req, reply) => {
+  const pos = { x: Number(req.query.x), y: Number(req.query.y), z: Number(req.query.z) };
+  if (![pos.x, pos.y, pos.z].every(Number.isInteger)) return reply.code(400).send({ error: "x, y and z must be whole numbers" });
+  const same = (v?: { x: number; y: number; z: number } | null) => !!v && v.x === pos.x && v.y === pos.y && v.z === pos.z;
+  const snap = poller.snapshot;
+  const visited = snap.visitedSectors.find((v) => same(v.relativeCoordinates));
+  const rec = discovery.sectorRecord(pos);
+  const ns = automation.neighbourScans().find((o) => same(o.relativeCoordinates));
+  const stationIds = stations.stations.map((x) => x.probeId);
+  const info: SectorInfo = {
+    pos,
+    visited: visited ? { visitCount: visited.visitCount, firstVisitedAt: visited.firstVisitedAt, lastVisitedAt: visited.lastVisitedAt } : null,
+    scan: rec ? { scannedAt: rec.scannedAt, knowledgeLevel: rec.knowledgeLevel, error: rec.error, coverage: rec.coverage, resources: rec.resources, objects: rec.objects as Array<Record<string, unknown>>, detail: rec.scan } : null,
+    neighbourScan: ns ? {
+      confidence: ns.confidence, knowledgeLevel: ns.knowledgeLevel, estimatedObjects: (ns.estimatedObjects ?? {}) as Record<string, unknown>,
+      possibleObjects: ns.possibleObjects ?? [], navigationalRisk: ns.navigationalRisk ?? null, scutCoverageStatus: ns.scutCoverageStatus, message: ns.message ?? null,
+    } : null,
+    probes: snap.probes.flatMap((p) => {
+      const d = p.detail;
+      const here = same(d?.sector?.relative);
+      const mv = isFullProbe(d) && d.movement && !["arrived", "failed", "destroyed"].includes(d.movement.status) && same(d.movement.target) ? d.movement : null;
+      if (!here && !mv) return [];
+      const cfg = settingsFor(automation.settings, p.summary.id);
+      const ex = automation.exploration.find((e) => e.probeId === p.summary.id);
+      return [{
+        id: p.summary.id, name: p.summary.name, status: d?.status ?? "unknown", reachable: p.summary.isReachable, isDefault: p.summary.isDefault,
+        station: stationIds.includes(p.summary.id), role: cfg.role ?? null, explore: !!cfg.explore,
+        exploring: ex ? { state: ex.state, text: ex.text } : null, arrivingAt: mv ? mv.arrivalAt : null,
+      }];
+    }),
+    discoveries: discovery.discoveries().filter((d) => same(d.sector)).map((d) => ({
+      kind: d.kind, title: d.title, detail: d.detail, read: d.read, present: d.present, firstSeenAt: d.firstSeenAt,
+    })),
+    candidates: automation.exploration.flatMap((e) => e.candidates.filter((c) => same(c.target)).map((c) => ({
+      probeName: e.probeName, score: c.score, notes: c.notes, safe: c.safe,
+    }))),
+  };
+  return info;
 });
 
 app.get("/panel-api/discoveries", async () => ({ discoveries: discovery.discoveries(), scans: discovery.scans() }));

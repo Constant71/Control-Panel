@@ -1,8 +1,10 @@
-import { useMemo, useState } from "react";
+import { useEffect, useMemo, useState } from "react";
 import type { PanelState } from "./types";
+import type { StarMapData } from "../shared/starmap";
 import { isFullProbe } from "../shared/attention";
-import { ago } from "./format";
 import { ExplorationPanel } from "./ExplorationPanel";
+import { StarMap3D } from "./StarMap3D";
+import { SectorCard } from "./SectorCard";
 
 type V = { x: number; y: number; z: number };
 const key = (v: V) => `${v.x},${v.y},${v.z}`;
@@ -14,9 +16,61 @@ const key = (v: V) => `${v.x},${v.y},${v.z}`;
  * projection; pick a z layer to slice.
  */
 export function SectorMap({ state }: { state: PanelState }) {
+  const [mode, setMode] = useState<"3d" | "flat">(() => {
+    try { return localStorage.getItem("mapMode") === "flat" ? "flat" : "3d"; } catch { return "3d"; }
+  });
+  const [selected, setSelected] = useState<string | null>(null);
+  const [data, setData] = useState<StarMapData | null>(null);
+  const pollKey = state.snapshot.lastPollFinishedAt;
+  useEffect(() => {
+    fetch("panel-api/starmap").then((r) => (r.ok ? r.json() : null)).then((d) => d && setData(d)).catch(() => {});
+  }, [pollKey]);
+  const pick = (m: "3d" | "flat") => {
+    setMode(m);
+    try { localStorage.setItem("mapMode", m); } catch { /* per-viewer convenience only */ }
+  };
+
+  return (
+    <div className="pad">
+      <div className="tabs small">
+        <button className={mode === "3d" ? "on" : ""} onClick={() => pick("3d")}>3D</button>
+        <button className={mode === "flat" ? "on" : ""} onClick={() => pick("flat")}>Flat</button>
+      </div>
+      {mode === "3d" ? (
+        <>
+          <StarMap3D data={data} selected={selected} onSelect={setSelected} />
+          <Legend />
+        </>
+      ) : (
+        <FlatMap state={state} selected={selected} setSelected={setSelected} />
+      )}
+      {selected ? (
+        <SectorCard sectorKey={selected} pollKey={pollKey} onClose={() => setSelected(null)} />
+      ) : (
+        <p className="muted tiny">Tap any sector, probe or dashed circle for everything the panel knows about it.</p>
+      )}
+      <ExplorationPanel state={state} />
+    </div>
+  );
+}
+
+function Legend() {
+  const items: Array<[string, string]> = [
+    ["#ffe0a8", "star system (rings = planets)"], ["#8fb0e8", "visited, no star"], ["#ff9a50", "black hole"], ["#a07de0", "dust cloud"],
+    ["#5ae6d2", "SCUT link / relay"], ["#6ef0ff", "potential blueprint"], ["#eaffff", "probe"], ["#ffd27a", "station"], ["#ff5a4a", "black-hole risk / missile"],
+  ];
+  return (
+    <div className="map-legend tiny muted">
+      {items.map(([c, t]) => <span key={t}><i style={{ background: c }} />{t}</span>)}
+      <span>dashed circle = scanned, not visited · dashed ring = sector (0, 0, 0) · drag to turn, pinch or scroll to zoom</span>
+    </div>
+  );
+}
+
+/** The original top-down x/y map, kept as the "Flat" view. */
+function FlatMap({ state, selected, setSelected }: { state: PanelState; selected: string | null; setSelected: (k: string | null) => void }) {
   const { visitedSectors, probes } = state.snapshot;
   const [layer, setLayer] = useState<"all" | number>("all");
-  const [selected, setSelected] = useState<string | null>(null);
 
   const probePos = useMemo(
     () =>
@@ -55,11 +109,8 @@ export function SectorMap({ state }: { state: PanelState }) {
   const sx = (x: number) => (x - minX) * C;
   const sy = (y: number) => (maxY - y) * C; // y up
 
-  const sel = selected ? visitedSectors.find((s) => key(s.relativeCoordinates) === selected) : null;
-  const selProbes = selected ? probePos.filter((p) => key(p.pos) === selected) : [];
-
   return (
-    <div className="pad">
+    <div>
       <div className="tabs small">
         <button className={layer === "all" ? "on" : ""} onClick={() => setLayer("all")}>all z</button>
         {layers.map((z) => (
@@ -109,22 +160,6 @@ export function SectorMap({ state }: { state: PanelState }) {
         Squares are visited sectors, dots are probes (hollow means out of SCUT range), dashed lines are moves in progress (including station trips), an outlined square marked S is a station, and the ring is
         your home sector (0, 0, 0). The view is top-down x/y{layer === "all" ? " with every z layer overlaid" : ""}.
       </p>
-      {selected && (
-        <div className="card">
-          <strong>Sector ({selected.replace(/,/g, ", ")})</strong>
-          {sel ? (
-            <p className="muted">
-              Visited {sel.visitCount}×, first {ago(sel.firstVisitedAt)}, last {ago(sel.lastVisitedAt)}
-            </p>
-          ) : (
-            <p className="muted">Not in visited history.</p>
-          )}
-          {selProbes.map((p) => (
-            <div key={p.id}><a href={`#/probe/${p.id}`}>{p.name}</a></div>
-          ))}
-        </div>
-      )}
-      <ExplorationPanel state={state} />
     </div>
   );
 }

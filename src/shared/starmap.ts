@@ -168,3 +168,42 @@ export function buildStarMap(input: StarMapInput): StarMapData {
   const mood = input.problemSeverities.includes("critical") ? "critical" : input.problemSeverities.includes("warning") ? "warning" : "calm";
   return { generatedAt: new Date(input.now).toISOString(), sectors: [...sectors.values()], frontier, probes, mood };
 }
+
+/** Everything the panel knows about one sector, for the tap card on the Map page (GET /panel-api/sector-info). */
+export interface SectorInfo {
+  pos: Vec;
+  visited: { visitCount: number; firstVisitedAt: string; lastVisitedAt: string } | null;
+  /** Last stored scan (GET /api/sector or the probe's current sector), null if never scanned. */
+  scan: {
+    scannedAt: string | null;
+    knowledgeLevel: string | null;
+    error: string | null;
+    coverage: string | null;
+    /** ECE per mineable resource, summed over mineable targets. */
+    resources: Record<string, number>;
+    /** SectorObject list as the game returned it. */
+    objects: Array<Record<string, unknown>>;
+    detail: { confidence: number; possibleObjects: string[]; navigationalRisk: string | null; sensorMode: string | null; dataFreshness: string | null; scutNetworks: Array<{ id: number; name?: string }> } | null;
+  } | null;
+  /** Passive neighbour scan of an unvisited sector. */
+  neighbourScan: {
+    confidence: number;
+    knowledgeLevel: string;
+    estimatedObjects: Record<string, unknown>;
+    possibleObjects: string[];
+    navigationalRisk: string | null;
+    scutCoverageStatus: string;
+    message: string | null;
+  } | null;
+  probes: Array<{
+    id: number; name: string; status: string; reachable: boolean; isDefault: boolean; station: boolean;
+    role: string | null; explore: boolean;
+    /** Exploration status line when Explore is on. */
+    exploring: { state: string; text: string } | null;
+    /** Set when the probe is flying here. */
+    arrivingAt: string | null;
+  }>;
+  discoveries: Array<{ kind: string; title: string; detail: string; read: boolean; present: boolean; firstSeenAt: string }>;
+  /** How exploring probes rate this sector as a next hop. */
+  candidates: Array<{ probeName: string; score: number; notes: string[]; safe: boolean }>;
+}
