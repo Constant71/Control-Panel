@@ -125,3 +125,40 @@ test("mining goes into the depot for metals, ice and carbon, never deuterium, an
     await mock.close();
   }
 });
+
+test("depots hidden together keep their own ids, and a mixed-up record is put right from the sector scan", async () => {
+  const { mock, poller } = await setup();
+  try {
+    const now = Date.now();
+    const snap = home(poller.snapshot);
+    const v = snap.probes[0];
+    const P = v.detail as Probe;
+    // Two Mannies detach at once, each reporting its own hidden object.
+    const detacher = (id: string, objectId: string) => ({ ...v.mannies![0], id, currentTask: "detaching_storage_container", task: { artificialObjectDetected: { objectId } } });
+    v.mannies!.push(detacher("ma", "detached-container-container-itm_a") as never, detacher("mb", "detached-container-container-itm_b") as never);
+    const hiding = (c: string, mannyId: string): Depot => ({
+      stationId: 1, containerId: c, objectId: hiddenIdFor(c), asteroidId: "asteroid-metal-1", asteroidName: "Metal", capacity: 1,
+      state: "hiding", at: at(now), updatedAt: at(now), contents: 0, readAt: null, note: null, mannyId,
+    });
+    let plan = planDepots({ snapshot: snap, stations: [station()], depots: [hiding("container-itm_a", "ma"), hiding("container-itm_b", "mb")], handoffs: [], busy: new Set(), now });
+    assert.ok(!plan.changes.some((c) => c.depot && c.depot.objectId !== hiddenIdFor(c.containerId)), "no depot takes another Manny's object id");
+
+    // The 2026-11-03 state: four records all pointing at container 12's object; 12 is back aboard, the others are hidden.
+    v.mannies = v.mannies!.filter((m) => m.currentTask === null);
+    const wrong = hiddenIdFor("container-itm_12");
+    P.inventory!.containers.push(box("container-itm_12", "Cargo 12", "container", 1, 0));
+    const ids = ["container-itm_5", "container-itm_11", "container-itm_13"];
+    v.sector = { ...(v.sector ?? {}), objects: [...((v.sector?.objects ?? []) as object[]), ...ids.map((c) => ({ id: hiddenIdFor(c), type: "detached_container", mode: "hidden_on_asteroid" }))] } as never;
+    const active = (c: string): Depot => ({ ...hiding(c, ""), objectId: wrong, state: "active", contents: 1, lost: true, mannyId: undefined });
+    plan = planDepots({ snapshot: snap, stations: [station()], depots: [...ids, "container-itm_12"].map(active), handoffs: [], busy: new Set(), now });
+    for (const c of ids) {
+      const ch = plan.changes.find((x) => x.containerId === c);
+      assert.equal(ch?.depot?.objectId, hiddenIdFor(c));
+      assert.equal(ch?.depot?.lost, false);
+      assert.equal(ch?.depot?.contents, null, "read again");
+    }
+    assert.equal(plan.changes.find((x) => x.containerId === "container-itm_12")?.depot, null, "the one aboard stops being a depot");
+  } finally {
+    await mock.close();
+  }
+});

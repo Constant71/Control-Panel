@@ -67,7 +67,8 @@ function pickIdleOnboard(ctx: Ctx, probeId: number): Schemas["Manny"] | null {
 const endpointFor = (plan: FixPlan): string => {
   switch (plan.kind) {
     case "transfer_manny": return `POST /api/probe/${plan.probeId}/mannies/${plan.mannyId}/transfer-to-probe`;
-    case "storage_move": return `POST /api/probe/${plan.probeId}/storage-moves`;
+    case "storage_move":
+    case "storage_move_items": return `POST /api/probe/${plan.probeId}/storage-moves`;
     case "drop_cargo": return `POST /api/probe/${plan.probeId}/mannies/${plan.mannyId}/drop-manny-cargo`;
     case "repair": return `POST /api/probe/${plan.probeId}/mannies/${plan.mannyId}/repair`;
     case "refill_tank": return `POST /api/probe/${plan.probeId}/mannies/${plan.mannyId}/refill-deuterium-tank`;
@@ -87,6 +88,7 @@ function fixId(plan: FixPlan): string {
   switch (plan.kind) {
     case "transfer_manny": return `transfer_manny:${plan.mannyId}:${plan.targetProbeId}`;
     case "storage_move": return `storage_move:${plan.probeId}:${plan.resourceType}:${plan.fromContainerId}>${plan.toContainerId}`;
+    case "storage_move_items": return `storage_move_items:${plan.probeId}:${plan.fromContainerId}>${plan.toContainerId}`;
     case "drop_cargo": return `drop_cargo:${plan.mannyId}`;
     case "repair": return `repair:${plan.probeId}`;
     case "refill_tank": return `refill_tank:${plan.probeId}`;
@@ -106,33 +108,58 @@ function fix(plan: FixPlan, label: string, why: string, mode: "auto" | "confirm"
  * Free up core storage by moving the largest resource stock in probe-core into
  * an additional container that has room (POST storage-moves, kind=resource).
  */
-function storageMoveFix(ctx: Ctx, p: Schemas["Probe"], why: string): FixOption | null {
+/** Hand-off containers (strictExclusion: manny) ship their cargo to the station, so loose parts stay out of them. */
+const isHandoff = (c: { kind: string; rules?: { strictExclusion?: unknown[] } }) =>
+  c.kind === "container" && (c.rules?.strictExclusion ?? []).map(String).includes("manny");
+
+/**
+ * Frees room in the core. Resources first (kind: resource). When the core holds no resources, its
+ * loose crafted parts go in one batch (kind: item, itemIds). The spec rejects additional_container
+ * items, items marked movable: false (the atomic printer) can't move, and Mannies stay where they dock.
+ */
+function storageMoveFix(ctx: Ctx, p: Schemas["Probe"], why: string): { fix: FixOption | null; blocker: string | null } {
   const inv = p.inventory;
-  if (!inv) return null;
+  if (!inv) return { fix: null, blocker: null };
   const core = inv.containers.find((c) => c.kind === "probe");
-  const dest = inv.containers
-    .filter((c) => c.kind === "container" && c.freeCapacity > 0.005)
-    .sort((a, b) => b.freeCapacity - a.freeCapacity)[0];
-  if (!core || !dest) return null;
+  if (!core) return { fix: null, blocker: null };
+  const room = (cs: typeof inv.containers) => cs.filter((c) => c.kind === "container" && c.freeCapacity > 0.005).sort((a, b) => b.freeCapacity - a.freeCapacity)[0];
   const candidates = inv.resourceStocks
     .map((s) => ({ type: s.type, inCore: s.containers.find((c) => c.container.id === core.id)?.amount ?? 0 }))
     .filter((s) => s.inCore > 0.001)
     .sort((a, b) => b.inCore - a.inCore);
   const pick = candidates[0];
-  if (!pick) return null;
+  const parts = (inv.items ?? []).filter((i) =>
+    i.container?.id === core.id && i.type !== "manny" && i.type !== "additional_container" &&
+    (i.metadata as { movable?: boolean } | undefined)?.movable !== false && (i.containerSpace ?? 0) > 0 && !i.currentTask);
+  const dest = pick ? room(inv.containers) : parts.length ? room(inv.containers.filter((c) => !isHandoff(c))) : undefined;
+  if (!pick && !parts.length) return { fix: null, blocker: "The core holds Mannies and fixed equipment only, nothing that can be moved." };
+  if (!dest) return { fix: null, blocker: null };
   const actor = pickIdleOnboard(ctx, p.id);
-  if (!actor) return null;
-  const amount = r3(Math.min(pick.inCore, dest.freeCapacity - 0.001));
-  if (amount <= 0) return null;
-  return fix(
-    {
-      kind: "storage_move", probeId: p.id, actorMannyId: actor.id, resourceType: pick.type,
-      amount, fromContainerId: core.id, toContainerId: dest.id,
-    },
-    `Move ${amount} ECE ${pick.type.replace("_", " ")} from ${core.label} to ${dest.label} (by ${actor.name})`,
-    why,
-    "auto",
-  );
+  if (!actor) return { fix: null, blocker: `Waiting for an idle Manny aboard to move cargo into "${dest.label}".` };
+  if (pick) {
+    const amount = r3(Math.min(pick.inCore, dest.freeCapacity - 0.001));
+    if (amount <= 0) return { fix: null, blocker: null };
+    return {
+      fix: fix(
+        { kind: "storage_move", probeId: p.id, actorMannyId: actor.id, resourceType: pick.type, amount, fromContainerId: core.id, toContainerId: dest.id },
+        `Move ${amount} ECE ${pick.type.replace("_", " ")} from ${core.label} to ${dest.label} (by ${actor.name})`, why, "auto"),
+      blocker: null,
+    };
+  }
+  const batch: typeof parts = [];
+  let space = 0;
+  for (const i of parts.sort((a, b) => (b.containerSpace ?? 0) - (a.containerSpace ?? 0))) {
+    if (space + (i.containerSpace ?? 0) > dest.freeCapacity - 0.001) continue;
+    batch.push(i);
+    space += i.containerSpace ?? 0;
+  }
+  if (!batch.length) return { fix: null, blocker: null };
+  return {
+    fix: fix(
+      { kind: "storage_move_items", probeId: p.id, actorMannyId: actor.id, itemIds: batch.map((i) => i.id), fromContainerId: core.id, toContainerId: dest.id },
+      `Move ${batch.length} part${batch.length === 1 ? "" : "s"} (${r3(space)} ECE) from ${core.label} to ${dest.label} (by ${actor.name})`, why, "auto"),
+    blocker: null,
+  };
 }
 
 export function detectProblems(snapshot: Snapshot, opts: DetectOptions = {}): Problem[] {
@@ -257,7 +284,7 @@ export function detectProblems(snapshot: Snapshot, opts: DetectOptions = {}): Pr
           }
         }
         // 2. Make room on this probe.
-        const move = storageMoveFix(ctx, d, "Frees space in the probe hull so the delivery or docking can complete.");
+        const move = storageMoveFix(ctx, d, "Frees space in the probe hull so the delivery or docking can complete.").fix;
         if (move) fixes.push(move);
         // 3. Last resort before the game drops it anyway: drop cargo to save the Manny.
         if (!mining && cargoTotal(m.cargo) > 0 && same(m.location.sector?.relative, d.sector?.relative))
@@ -371,12 +398,12 @@ export function detectProblems(snapshot: Snapshot, opts: DetectOptions = {}): Pr
     const core = d.inventory?.containers.find((c) => c.kind === "probe");
     const waitingHere = (v.mannies ?? []).some((m) => taskObj(m).waitingFor === "storage_space");
     if (core && core.freeCapacity <= core.capacity * 0.05 && !waitingHere) {
-      const f = storageMoveFix(ctx, d, "Keeps room in the probe hull so returning Mannies and deliveries don't get stuck.");
+      const { fix: f, blocker } = storageMoveFix(ctx, d, "Keeps room in the probe hull so returning Mannies and deliveries don't get stuck.");
       out.push({
         key: `probe:${d.id}:core_full`, severity: "warning", code: "storage_full",
         title: `${core.label} storage ${Math.round((core.usedCapacity / core.capacity) * 100)}% full`, detail: "",
         ...base(v), since: null, deadline: null, source: "StorageContainer.freeCapacity", fixes: f ? [f] : [],
-        advice: f ? null : "No additional container with room. Jettison or use resources, or craft an additional container.",
+        advice: f ? null : blocker ?? "No additional container with room. Jettison or use resources, or craft an additional container.",
       });
     }
 

@@ -167,6 +167,12 @@ export class Fixer extends EventEmitter {
           },
         });
         break;
+      case "storage_move_items":
+        r = await c.POST("/api/probe/{probeId}/storage-moves", {
+          params: { path: { probeId: plan.probeId } },
+          body: { actorMannyId: plan.actorMannyId, kind: "item", itemIds: plan.itemIds, fromContainerId: plan.fromContainerId, toContainerId: plan.toContainerId },
+        });
+        break;
       case "drop_cargo":
         r = await c.POST("/api/probe/{probeId}/mannies/{mannyId}/drop-manny-cargo", mp(plan.probeId, plan.mannyId));
         break;
@@ -214,7 +220,7 @@ export class Fixer extends EventEmitter {
 }
 
 function mannyIdsOf(plan: FixPlan): string[] {
-  if (plan.kind === "storage_move") return [plan.actorMannyId];
+  if (plan.kind === "storage_move" || plan.kind === "storage_move_items") return [plan.actorMannyId];
   if ("mannyId" in plan) return [plan.mannyId];
   return [];
 }

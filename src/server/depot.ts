@@ -78,6 +78,11 @@ function allAsteroids(sector: Schemas["SectorObservation"] | null): Obj[] {
   return out;
 }
 
+/** Ids of detached containers the sector scan shows. */
+function detachedHere(sector: Schemas["SectorObservation"] | null): Set<string> {
+  return new Set(((sector?.objects ?? []) as Obj[]).filter((o) => o.type === "detached_container" && o.id).map((o) => o.id!));
+}
+
 /** Asteroids in the station's sector with metals, ice or carbon, richest first. */
 function asteroids(sector: Schemas["SectorObservation"] | null): Obj[] {
   const amount = (o: Obj) => {
@@ -137,7 +142,9 @@ export function planDepots({ snapshot, stations, depots, handoffs, busy, now, re
       const change = (depot: Depot | null, log: string) => out.changes.push({ stationId: cfg.probeId, containerId: d0.containerId, depot, log });
       switch (d.state) {
         case "hiding": {
-          const detaching = sv.mannies.find((m) => m.currentTask === "detaching_storage_container");
+          // Only the Manny that was ordered to hide *this* container says where it went. Several depots can be
+          // hiding at once (2026-11-03: four took the first detaching Manny's id and all pointed at one container).
+          const detaching = sv.mannies.find((m) => m.currentTask === "detaching_storage_container" && (d.mannyId ? m.id === d.mannyId : false));
           const seen = detaching ? (taskOf(detaching).artificialObjectDetected as { objectId?: string } | undefined)?.objectId : undefined;
           if (seen && seen !== d.objectId) d = { ...d, objectId: seen };
           if (detaching || !settled(d)) {
@@ -153,6 +160,18 @@ export function planDepots({ snapshot, stations, depots, handoffs, busy, now, re
           break;
         }
         case "active": {
+          if (onboard(d.containerId)) {
+            change(null, `Depot container is aboard ${name} again; it is normal storage now.`);
+            break;
+          }
+          // The game's id for the hidden container is fixed by its container id. If the scan shows that object
+          // and the record points somewhere else, the record is wrong: point it back and read it again.
+          const own = hiddenIdFor(d.containerId);
+          if (d.objectId !== own && detachedHere(sv.sector).has(own)) {
+            change({ ...d, objectId: own, lost: false, contents: null, readAt: null, note: null, updatedAt: iso },
+              `Depot "${d.containerId}" was tracked as ${d.objectId}; the sector scan shows it as ${own}. Fixed.`);
+            break;
+          }
           if (d.lost) { note(`The depot ${d.objectId} on ${d.asteroidName} can't be found (GET sector-objects inventory: 404). Nothing new is mined into it; check that asteroid in the game.`); break; }
           const miners = depotMiners(snapshot, d.objectId);
           const rockThere = !sv.sector || allAsteroids(sv.sector).some((o) => o.id === d.asteroidId);

@@ -15,6 +15,7 @@ export type FixPlan =
       fromContainerId: string;
       toContainerId: string;
     }
+  | { kind: "storage_move_items"; probeId: number; actorMannyId: string; itemIds: string[]; fromContainerId: string; toContainerId: string }
   | { kind: "drop_cargo"; probeId: number; mannyId: string }
   | { kind: "repair"; probeId: number; mannyId: string; integrityPercent: number }
   | { kind: "refill_tank"; probeId: number; mannyId: string }

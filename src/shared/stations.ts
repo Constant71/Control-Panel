@@ -128,6 +128,8 @@ export interface Depot {
   contents: number | null;
   readAt: string | null;
   note: string | null;
+  /** The Manny ordered to hide it (its detach task names the hidden object). */
+  mannyId?: string;
   /** The inventory read returned 404: no new mining goes into it until it is found again. */
   lost?: boolean;
 }
